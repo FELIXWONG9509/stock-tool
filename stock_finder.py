@@ -11,11 +11,11 @@ st.title("📈 自选技术指标 · 历史相似匹配获利概率")
 st.caption("选择你关注的技术指标及参数，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
-days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 30, 50, 80, 100, 120, 150, 200, 250, 300, 400], index=2)
+days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
 # ----- 指标选择区 -----
 st.sidebar.header("🔧 选择技术指标组合")
-st.sidebar.markdown("勾选你想使用的指标，并可调整参数（右侧会显示当期数值范围）")
+st.sidebar.markdown("勾选你想使用的指标，并可调整参数")
 
 use_skdj = st.sidebar.checkbox("SKDJ (慢速随机指标)", value=True)
 skdj_n = st.sidebar.slider("SKDJ 参数 N (快线周期)", 5, 30, 9)
@@ -70,18 +70,14 @@ def compute_all_features(df):
     features = pd.DataFrame(index=df.index)
 
     if use_skdj:
-        # SKDJ 计算：先算 RSV，再求 K/D 的慢速平滑
         low_n = low.rolling(window=skdj_n).min()
         high_n = high.rolling(window=skdj_n).max()
         rsv = (close - low_n) / (high_n - low_n + 1e-10) * 100
-        # 普通 KDJ 的 K、D
         k = rsv.ewm(alpha=1/skdj_m, adjust=False).mean()
         d = k.ewm(alpha=1/skdj_m, adjust=False).mean()
-        # SKDJ 的 K 就是普通 KDJ 的 D，D 是 D 的再移动平均，但这里采用常见实现：直接用 (k+d)/2 作为单值，或 K 和 D 分别作为两个特征
-        # 为简化，我们只取 SKDJ_K 和 SKDJ_D 两个值
-        skdj_k = d  # 这是慢速 K
-        skdj_d = d.ewm(alpha=1/skdj_m, adjust=False).mean()  # 慢速 D
-        features["skdj_k"] = skdj_k / 100.0   # 归一化到 0-1
+        skdj_k = d
+        skdj_d = d.ewm(alpha=1/skdj_m, adjust=False).mean()
+        features["skdj_k"] = skdj_k / 100.0
         features["skdj_d"] = skdj_d / 100.0
 
     if use_rsi:
@@ -100,7 +96,6 @@ def compute_all_features(df):
         macd_line = ema_fast - ema_slow
         signal = macd_line.ewm(span=macd_signal).mean()
         macd_hist = macd_line - signal
-        # 用除以收盘价做归一化
         features["macd_hist_norm"] = macd_hist / (close + 1e-10)
 
     if use_bb:
@@ -135,26 +130,28 @@ if st.button("🔍 开始分析"):
             if len(combined) < 252:
                 st.error("有效历史数据不足，至少需1年以上")
             else:
+                # 从清洗后的 combined 中提取特征列（避免 NaN）
+                feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
                 # 当前最新特征（最后一行）
-                current_feat = features.iloc[-1:].values
-                # 历史特征（排除最近20天，防止未来信息）
-                hist_feat = features.iloc[:-20].values
+                current_feat = combined[feature_cols].iloc[-1:].values
+                # 历史特征（排除最近20天）
+                hist_feat = combined[feature_cols].iloc[:-20].values
+
                 if len(hist_feat) < 50:
                     st.warning("历史相似样本数较少，结果可能有偏差")
 
-                # 余弦相似度
                 sim = cosine_similarity(current_feat, hist_feat)[0]
                 top_k = min(50, len(sim))
                 top_idx = np.argsort(sim)[-top_k:][::-1]
                 sim_scores = sim[top_idx]
 
-                # 计算未来收益
                 close_series = combined["close"].reset_index(drop=True)
                 rets = []
                 for idx in top_idx:
                     if idx + days_hold < len(close_series):
                         ret = (close_series.iloc[idx + days_hold] / close_series.iloc[idx]) - 1
                         rets.append(ret)
+
                 if len(rets) < 10:
                     st.error("有效相似样本太少，无法统计")
                 else:
@@ -163,7 +160,10 @@ if st.button("🔍 开始分析"):
                     avg_ret = ret_arr.mean()
                     pos = ret_arr[ret_arr > 0]
                     neg = ret_arr[ret_arr < 0]
-                    pl_ratio = pos.mean() / abs(neg.mean()) if len(pos) and len(neg) else np.inf
+                    if len(pos) > 0 and len(neg) > 0:
+                        pl_ratio = pos.mean() / abs(neg.mean())
+                    else:
+                        pl_ratio = np.inf if len(neg) == 0 else 0
 
                     col1, col2, col3 = st.columns(3)
                     col1.metric("上涨概率", f"{win_rate:.1%}")
@@ -177,7 +177,7 @@ if st.button("🔍 开始分析"):
 
                     fig = px.histogram(ret_arr, nbins=20,
                                        title=f"相似历史持有{days_hold}天收益分布",
-                                       labels={"value":"收益率"}, opacity=0.7)
+                                       labels={"value": "收益率"}, opacity=0.7)
                     fig.add_vline(x=0, line_dash="dash", line_color="red")
                     st.plotly_chart(fig, use_container_width=True)
 
