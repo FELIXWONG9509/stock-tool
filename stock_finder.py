@@ -112,6 +112,13 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
+# ========== 侧边栏顶部：重置按钮 ==========
+if st.sidebar.button("🔄 重置所有指标"):
+    for k in all_keys:
+        st.session_state[k] = False
+    st.session_state.combo = "自定义（手动选择）"
+    st.rerun()
+
 # ========== 侧边栏：固定搭配 ==========
 with st.sidebar.expander("📦 固定搭配", expanded=True):
     current_display = None
@@ -461,13 +468,13 @@ if st.button("🔍 开始分析"):
                     matched_indices = hist_combined_idx[top_idx]
                     sim_scores = sim[top_idx]
 
-                    # ---------- 展示当前指标数值 ----------
+                    # 当前指标数值
                     with st.expander("📊 当前分析日期的技术指标数值"):
                         current_series = combined.loc[target_idx, feature_cols]
                         current_df = pd.DataFrame({"指标": current_series.index, "数值": current_series.values})
                         st.dataframe(current_df.set_index("指标"), use_container_width=True)
 
-                    # ---------- 展示相似历史指标数值（前5个） ----------
+                    # 最相似历史指标数值
                     with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
                         top_n_show = min(5, len(matched_indices))
                         top_match_indices = matched_indices[:top_n_show]
@@ -476,7 +483,7 @@ if st.button("🔍 开始分析"):
                         sim_indicators = sim_indicators.drop(columns=["date"]).set_index("日期")
                         st.dataframe(sim_indicators, use_container_width=True)
 
-                    # ---------- 收益统计 ----------
+                    # 收益统计
                     close_series = combined["close"].reset_index(drop=True)
                     rets = []
                     for idx in matched_indices:
