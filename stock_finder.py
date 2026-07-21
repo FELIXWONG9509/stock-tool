@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="自定义指标历史相似概率", layout="wide")
 st.title("📈 自选技术指标 · 历史相似匹配获利概率")
-st.caption("选择你关注的技术指标及参数，寻找历史上最相似的时刻，计算后续上涨概率。")
+st.caption("选择技术指标及参数，寻找历史上最相似的时刻（含趋势形态），计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
@@ -38,7 +38,6 @@ vol_period = st.sidebar.slider("均量周期", 5, 30, 20)
 
 use_trend = st.sidebar.checkbox("短期趋势强度 (5日/20日线)", value=True)
 
-# 必须至少选一个指标
 if not any([use_skdj, use_rsi, use_macd, use_bb, use_vol, use_trend]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
@@ -61,7 +60,7 @@ def load_data(stock_code):
         st.error(f"数据获取失败: {e}")
         return None
 
-# ----- 指标计算引擎 -----
+# ----- 指标计算引擎（增强趋势特征） -----
 def compute_all_features(df):
     close = df["close"]
     high = df["high"]
@@ -75,10 +74,17 @@ def compute_all_features(df):
         rsv = (close - low_n) / (high_n - low_n + 1e-10) * 100
         k = rsv.ewm(alpha=1/skdj_m, adjust=False).mean()
         d = k.ewm(alpha=1/skdj_m, adjust=False).mean()
-        skdj_k = d
-        skdj_d = d.ewm(alpha=1/skdj_m, adjust=False).mean()
+        skdj_k = d                     # 慢速K
+        skdj_d = d.ewm(alpha=1/skdj_m, adjust=False).mean()   # 慢速D
+
+        # 基础位置（0~1）
         features["skdj_k"] = skdj_k / 100.0
         features["skdj_d"] = skdj_d / 100.0
+
+        # 【新增】趋势与形态特征
+        features["skdj_k_5d_change"] = skdj_k.diff(5) / 100.0   # K值5日变动（趋势方向）
+        features["skdj_d_5d_change"] = skdj_d.diff(5) / 100.0   # D值5日变动
+        features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0    # 开口大小与方向
 
     if use_rsi:
         delta = close.diff()
@@ -89,6 +95,8 @@ def compute_all_features(df):
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
         features["rsi"] = rsi / 100.0
+        # 增加RSI短期变动
+        features["rsi_5d_change"] = rsi.diff(5) / 100.0
 
     if use_macd:
         ema_fast = close.ewm(span=macd_fast).mean()
@@ -97,6 +105,8 @@ def compute_all_features(df):
         signal = macd_line.ewm(span=macd_signal).mean()
         macd_hist = macd_line - signal
         features["macd_hist_norm"] = macd_hist / (close + 1e-10)
+        # MACD柱5日变化
+        features["macd_hist_5d_change"] = macd_hist.diff(5) / (close + 1e-10)
 
     if use_bb:
         bb_mid = close.rolling(bb_period).mean()
@@ -130,11 +140,8 @@ if st.button("🔍 开始分析"):
             if len(combined) < 252:
                 st.error("有效历史数据不足，至少需1年以上")
             else:
-                # 从清洗后的 combined 中提取特征列（避免 NaN）
                 feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
-                # 当前最新特征（最后一行）
                 current_feat = combined[feature_cols].iloc[-1:].values
-                # 历史特征（排除最近20天）
                 hist_feat = combined[feature_cols].iloc[:-20].values
 
                 if len(hist_feat) < 50:
