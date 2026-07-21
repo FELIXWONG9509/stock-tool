@@ -9,14 +9,13 @@ from datetime import datetime, timedelta, date
 import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
-st.title("📈 多技术指标 · 历史相似匹配获利概率")
-st.caption("选择分类固定搭配或自由组合，并可指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
+st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
 analysis_date = st.date_input("📅 分析日期（默认今天，可选择历史日期）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 固定搭配定义 ==========
+# ========== 固定搭配定义（仅保留四个经典组合） ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {
         "说明": "在下方短线/长线区域自由勾选指标，完全自定义。",
@@ -24,82 +23,44 @@ FIXED_COMBOS = {
         "类别": "",
         "keys": []
     },
-    "MA 双均线": {
-        "说明": "快线上穿慢线买入，下穿卖出。利用双均线交叉判断趋势拐点，适合有明显趋势的单边行情。",
+    "BOLL + KDJ 经典组合": {
+        "说明": "布林带判断趋势与空间，KDJ判断短线买卖时机。策略：多头回踩中下轨+KDJ低位金叉买入；冲上轨+KDJ高位死叉卖出。",
+        "适合周期": "10天 ~ 60天",
+        "类别": "经典组合",
+        "keys": ["use_boll", "use_kdj"]
+    },
+    "MACD + OBV 量价组合": {
+        "说明": "MACD判断趋势，OBV验证量能。金叉+OBV上升=可信上涨；死叉+OBV下降=可靠下跌。背离信号可捕捉诱多或吸筹。",
         "适合周期": "20天 ~ 100天",
-        "类别": "趋势跟踪型",
-        "keys": ["use_ma"]
+        "类别": "经典组合",
+        "keys": ["use_macd", "use_obv"]
     },
-    "MACD + MA": {
-        "说明": "用MACD判断动能变化，均线确认趋势方向，经典中长线趋势策略。",
-        "适合周期": "20天 ~ 100天",
-        "类别": "趋势跟踪型",
-        "keys": ["use_macd", "use_ma"]
+    "EXPMA + CCI 短线组合": {
+        "说明": "EXPMA提供支撑压力与趋势方向，CCI捕捉超买超卖与突破。回踩EXPMA+CCI从负区拐头为回踩买点；CCI上破+100为加速信号。",
+        "适合周期": "5天 ~ 30天",
+        "类别": "经典组合",
+        "keys": ["use_expma", "use_cci"]
     },
-    "BOLL + RSI": {
-        "说明": "布林带判断震荡区间，RSI捕捉超买超卖极点，适合横盘高抛低吸。",
-        "适合周期": "10天 ~ 30天",
-        "类别": "震荡反转型",
-        "keys": ["use_boll", "use_rsi"]
-    },
-    "KDJ + MA": {
-        "说明": "KDJ敏感捕捉短线拐点，MA确认支撑/压力，适合震荡中寻找转折。",
-        "适合周期": "5天 ~ 20天",
-        "类别": "震荡反转型",
-        "keys": ["use_kdj", "use_ma"]
-    },
-    "KDJ + RSI": {
-        "说明": "KDJ和RSI双指标共振，捕捉超买超卖区的短期交易机会。",
-        "适合周期": "5天 ~ 10天",
-        "类别": "短线交易型",
-        "keys": ["use_kdj", "use_rsi"]
-    },
-    "SKDJ + RSI": {
-        "说明": "慢速KDJ过滤杂讯，结合RSI极值区域，提高短线反转信号可靠性。",
-        "适合周期": "5天 ~ 10天",
-        "类别": "短线交易型",
-        "keys": ["use_skdj", "use_rsi"]
-    },
-    "KDJ + VOL + MA": {
-        "说明": "KDJ发出信号，成交量验证，MA提供趋势背景，三重过滤提高短线胜率。",
-        "适合周期": "5天 ~ 10天",
-        "类别": "短线交易型",
-        "keys": ["use_kdj", "use_vol", "use_ma"]
-    },
-    "RSI + MACD + MA": {
-        "说明": "RSI找入场区，MACD确认动能反转，MA确认方向，适合快进快出。",
-        "适合周期": "5天 ~ 20天",
-        "类别": "短线交易型",
-        "keys": ["use_rsi", "use_macd", "use_ma"]
-    },
-    "MACD + SAR + BOLL + MA": {
-        "说明": "MACD定方向，SAR做移动止损，布林带看波动，MA确认排列，适合稳健波段。",
-        "适合周期": "20天 ~ 100天",
-        "类别": "中线稳健型",
-        "keys": ["use_macd", "use_sar", "use_boll", "use_ma"]
-    },
-    "BOLL + MACD": {
-        "说明": "MACD确认突破，布林带判断上下轨位置，经典中线波段策略。",
-        "适合周期": "20天 ~ 60天",
-        "类别": "中线稳健型",
-        "keys": ["use_boll", "use_macd"]
+    "DMI + SAR 多空组合": {
+        "说明": "DMI判断趋势强度（ADX>25为强趋势），SAR提供止损点。PDI上穿MDI+ADX上升+SAR红点，预示主升浪启动。",
+        "适合周期": "20天 ~ 150天",
+        "类别": "经典组合",
+        "keys": ["use_dmi", "use_sar"]
     }
 }
 
-# 构建显示名映射
+# 构建显示名映射（仅经典组合分类）
 display_to_combo = {}
 combo_options = ["自定义（手动选择）"]
 display_to_combo["自定义（手动选择）"] = "自定义（手动选择）"
 
-categories = ["趋势跟踪型", "震荡反转型", "短线交易型", "中线稳健型"]
-for cat in categories:
-    combos_in_cat = [(name, info) for name, info in FIXED_COMBOS.items() if info.get("类别") == cat]
-    if combos_in_cat:
-        combo_options.append(f"── {cat} ──")
-        for name, info in combos_in_cat:
-            display_name = f"   {name}"
-            combo_options.append(display_name)
-            display_to_combo[display_name] = name
+# 添加经典组合分类
+combo_options.append("── 经典组合 ──")
+classic_combos = [(name, info) for name, info in FIXED_COMBOS.items() if info.get("类别") == "经典组合"]
+for name, info in classic_combos:
+    display_name = f"   {name}"
+    combo_options.append(display_name)
+    display_to_combo[display_name] = name
 
 # 所有指标 key
 short_keys = ['use_kdj', 'use_skdj', 'use_rsi', 'use_wr', 'use_bias', 'use_cci', 'use_roc']
@@ -446,7 +407,6 @@ if st.button("🔍 开始分析"):
                     feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
                     current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
 
-                    # 排除分析日期前后各20天
                     exclude_start = max(0, target_idx - 20)
                     exclude_end = min(len(combined), target_idx + 21)
                     hist_mask = np.ones(len(combined), dtype=bool)
@@ -468,13 +428,11 @@ if st.button("🔍 开始分析"):
                     matched_indices = hist_combined_idx[top_idx]
                     sim_scores = sim[top_idx]
 
-                    # 当前指标数值
                     with st.expander("📊 当前分析日期的技术指标数值"):
                         current_series = combined.loc[target_idx, feature_cols]
                         current_df = pd.DataFrame({"指标": current_series.index, "数值": current_series.values})
                         st.dataframe(current_df.set_index("指标"), use_container_width=True)
 
-                    # 最相似历史指标数值
                     with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
                         top_n_show = min(5, len(matched_indices))
                         top_match_indices = matched_indices[:top_n_show]
@@ -483,7 +441,6 @@ if st.button("🔍 开始分析"):
                         sim_indicators = sim_indicators.drop(columns=["date"]).set_index("日期")
                         st.dataframe(sim_indicators, use_container_width=True)
 
-                    # 收益统计
                     close_series = combined["close"].reset_index(drop=True)
                     rets = []
                     for idx in matched_indices:
