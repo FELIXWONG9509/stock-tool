@@ -10,12 +10,12 @@ import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.title("📈 多技术指标 · 历史相似匹配获利概率")
-st.caption("选择固定搭配或自由组合，寻找历史上最相似的时刻，计算后续上涨概率。")
+st.caption("选择固定搭配或自由组合，并可调整各指标参数，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 固定搭配定义（新增选项） ==========
+# ========== 固定搭配定义 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {
         "说明": "在下方短线/长线区域自由勾选指标，完全自定义。",
@@ -109,68 +109,73 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 短线指标区域（可微调） ==========
+# ========== 参数统一调整区（仅显示已勾选指标的参数） ==========
+with st.sidebar.expander("🔧 参数调整", expanded=True):
+    # 根据 session_state 决定显示哪些参数
+    if st.session_state.use_skdj:
+        skdj_n = st.slider("SKDJ N", 5, 30, 9, key='skdj_n')
+        skdj_m = st.slider("SKDJ M", 2, 10, 3, key='skdj_m')
+    if st.session_state.use_rsi:
+        rsi_period = st.slider("RSI 周期", 5, 30, 14, key='rsi_period')
+    if st.session_state.use_wr:
+        wr_period = st.slider("WR 周期", 5, 30, 14, key='wr_period')
+    if st.session_state.use_bias:
+        bias_period = st.slider("BIAS 均线周期", 5, 60, 20, key='bias_period')
+    if st.session_state.use_cci:
+        cci_period = st.slider("CCI 周期", 5, 30, 20, key='cci_period')
+    if st.session_state.use_roc:
+        roc_period = st.slider("ROC 周期", 5, 30, 12, key='roc_period')
+    if st.session_state.use_macd:
+        macd_fast = st.slider("MACD 快线", 5, 30, 12, key='macd_fast')
+        macd_slow = st.slider("MACD 慢线", 10, 40, 26, key='macd_slow')
+        macd_signal = st.slider("MACD 信号线", 5, 15, 9, key='macd_signal')
+    if st.session_state.use_expma:
+        expma_short = st.slider("EXPMA 短期", 5, 30, 12, key='expma_short')
+        expma_long = st.slider("EXPMA 长期", 20, 60, 50, key='expma_long')
+    if st.session_state.use_boll:
+        bb_period = st.slider("BOLL 周期", 10, 50, 20, key='bb_period')
+        bb_std = st.slider("标准差倍数", 1, 4, 2, key='bb_std')
+    if st.session_state.use_dmi:
+        dmi_period = st.slider("DMI 周期", 5, 30, 14, key='dmi_period')
+    if st.session_state.use_vol:
+        vol_period = st.slider("均量周期", 5, 30, 20, key='vol_period')
+    # 无参数指标不显示滑块
+
+# ========== 短线指标区域（只负责勾选，不显示参数） ==========
 with st.sidebar.expander("⚡ 短线指标（可增减）", expanded=True):
     use_kdj = st.checkbox("KDJ (随机指标)", key='use_kdj')
     st.caption("K/D/J三线，反映超买超卖与交叉信号。")
     use_skdj = st.checkbox("SKDJ (慢速随机指标)", key='use_skdj')
     st.caption("慢速平滑KDJ，适合波段拐点判断。")
-    if use_skdj:
-        skdj_n = st.slider("SKDJ N", 5, 30, 9)
-        skdj_m = st.slider("SKDJ M", 2, 10, 3)
     use_rsi = st.checkbox("RSI (相对强弱)", key='use_rsi')
     st.caption("0~100摆动，>70超买，<30超卖。")
-    if use_rsi:
-        rsi_period = st.slider("RSI 周期", 5, 30, 14)
     use_wr = st.checkbox("WR (威廉指标)", key='use_wr')
     st.caption("与KDJ类似，-80以下超卖，-20以上超买。")
-    if use_wr:
-        wr_period = st.slider("WR 周期", 5, 30, 14)
     use_bias = st.checkbox("BIAS (乖离率)", key='use_bias')
     st.caption("收盘价与均线的偏离程度，捕捉回归机会。")
-    if use_bias:
-        bias_period = st.slider("BIAS 均线周期", 5, 60, 20)
     use_cci = st.checkbox("CCI (商品通道指数)", key='use_cci')
     st.caption("突破+100/-100为强/弱势信号。")
-    if use_cci:
-        cci_period = st.slider("CCI 周期", 5, 30, 20)
     use_roc = st.checkbox("ROC (变动速率)", key='use_roc')
     st.caption("价格N日涨跌幅，衡量趋势速度。")
-    if use_roc:
-        roc_period = st.slider("ROC 周期", 5, 30, 12)
 
-# ========== 长线指标区域（可微调） ==========
+# ========== 长线指标区域（只负责勾选，不显示参数） ==========
 with st.sidebar.expander("📊 长线指标（可增减）", expanded=True):
     use_ma = st.checkbox("MA (均线排列)", key='use_ma')
     st.caption("多周期均线位置与多头排列强度。")
     use_macd = st.checkbox("MACD", key='use_macd')
     st.caption("快慢线差与柱体，反映趋势动能。")
-    if use_macd:
-        macd_fast = st.slider("MACD 快线", 5, 30, 12)
-        macd_slow = st.slider("MACD 慢线", 10, 40, 26)
-        macd_signal = st.slider("MACD 信号线", 5, 15, 9)
     use_expma = st.checkbox("EXPMA (指数均线)", key='use_expma')
     st.caption("近期价格偏重，反应更快。")
-    if use_expma:
-        expma_short = st.slider("EXPMA 短期", 5, 30, 12)
-        expma_long = st.slider("EXPMA 长期", 20, 60, 50)
     use_boll = st.checkbox("BOLL (布林带)", key='use_boll')
     st.caption("上下轨与中轨的相对位置。")
-    if use_boll:
-        bb_period = st.slider("BOLL 周期", 10, 50, 20)
-        bb_std = st.slider("标准差倍数", 1, 4, 2)
     use_sar = st.checkbox("SAR (抛物线转向)", key='use_sar')
     st.caption("停损点，价格与SAR的距离反映趋势强度。")
     use_dmi = st.checkbox("DMI (趋向指标)", key='use_dmi')
     st.caption("PDI/MDI/ADX，判断趋势有无及方向。")
-    if use_dmi:
-        dmi_period = st.slider("DMI 周期", 5, 30, 14)
     use_obv = st.checkbox("OBV (能量潮)", key='use_obv')
     st.caption("成交量累计，验证价格趋势。")
     use_vol = st.checkbox("量比", key='use_vol')
     st.caption("当日量与近期均量之比。")
-    if use_vol:
-        vol_period = st.slider("均量周期", 5, 30, 20)
     use_trend = st.checkbox("短期趋势强度", key='use_trend')
     st.caption("5日与20日线的距离，正为多头。")
 
