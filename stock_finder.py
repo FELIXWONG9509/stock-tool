@@ -5,17 +5,18 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.title("📈 多技术指标 · 历史相似匹配获利概率")
-st.caption("选择分类固定搭配或自由组合，并可调整各指标参数，寻找历史上最相似的时刻，计算后续上涨概率。")
+st.caption("选择分类固定搭配或自由组合，并可指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
+analysis_date = st.date_input("📅 分析日期（默认今天，可选择历史日期）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 固定搭配定义（分类） ==========
+# ========== 固定搭配定义 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {
         "说明": "在下方短线/长线区域自由勾选指标，完全自定义。",
@@ -23,7 +24,6 @@ FIXED_COMBOS = {
         "类别": "",
         "keys": []
     },
-    # 一、趋势跟踪型
     "MA 双均线": {
         "说明": "快线上穿慢线买入，下穿卖出。利用双均线交叉判断趋势拐点，适合有明显趋势的单边行情。",
         "适合周期": "20天 ~ 100天",
@@ -36,7 +36,6 @@ FIXED_COMBOS = {
         "类别": "趋势跟踪型",
         "keys": ["use_macd", "use_ma"]
     },
-    # 二、震荡反转型
     "BOLL + RSI": {
         "说明": "布林带判断震荡区间，RSI捕捉超买超卖极点，适合横盘高抛低吸。",
         "适合周期": "10天 ~ 30天",
@@ -49,7 +48,6 @@ FIXED_COMBOS = {
         "类别": "震荡反转型",
         "keys": ["use_kdj", "use_ma"]
     },
-    # 三、短线交易型
     "KDJ + RSI": {
         "说明": "KDJ和RSI双指标共振，捕捉超买超卖区的短期交易机会。",
         "适合周期": "5天 ~ 10天",
@@ -74,7 +72,6 @@ FIXED_COMBOS = {
         "类别": "短线交易型",
         "keys": ["use_rsi", "use_macd", "use_ma"]
     },
-    # 四、中线稳健型
     "MACD + SAR + BOLL + MA": {
         "说明": "MACD定方向，SAR做移动止损，布林带看波动，MA确认排列，适合稳健波段。",
         "适合周期": "20天 ~ 100天",
@@ -89,7 +86,7 @@ FIXED_COMBOS = {
     }
 }
 
-# 构建带分类前缀的显示名映射
+# 构建显示名映射
 display_to_combo = {}
 combo_options = []
 combo_options.append("自定义（手动选择）")
@@ -105,7 +102,7 @@ for cat in categories:
             combo_options.append(display_name)
             display_to_combo[display_name] = name
 
-# 所有可能的指标 key
+# 所有指标 key
 short_keys = ['use_kdj', 'use_skdj', 'use_rsi', 'use_wr', 'use_bias', 'use_cci', 'use_roc']
 long_keys = ['use_ma', 'use_macd', 'use_expma', 'use_boll', 'use_sar', 'use_dmi', 'use_obv', 'use_vol', 'use_trend']
 all_keys = short_keys + long_keys
@@ -116,7 +113,7 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
-# ========== 侧边栏：固定搭配选项卡 ==========
+# ========== 侧边栏：固定搭配 ==========
 with st.sidebar.expander("📦 固定搭配", expanded=True):
     current_display = None
     for disp, combo in display_to_combo.items():
@@ -151,7 +148,7 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 参数统一调整区（新增KDJ周期） ==========
+# ========== 参数调整 ==========
 with st.sidebar.expander("🔧 参数调整", expanded=True):
     if st.session_state.use_kdj:
         kdj_n = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n')
@@ -186,7 +183,7 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
     if st.session_state.use_vol:
         vol_period = st.slider("均量周期", 5, 30, 20, key='vol_period')
 
-# ========== 短线指标区域 ==========
+# ========== 指标勾选区 ==========
 with st.sidebar.expander("⚡ 短线指标（可增减）", expanded=True):
     use_kdj = st.checkbox("KDJ (随机指标)", key='use_kdj')
     st.caption("K/D/J三线，反映超买超卖与交叉信号。")
@@ -203,7 +200,6 @@ with st.sidebar.expander("⚡ 短线指标（可增减）", expanded=True):
     use_roc = st.checkbox("ROC (变动速率)", key='use_roc')
     st.caption("价格N日涨跌幅，衡量趋势速度。")
 
-# ========== 长线指标区域 ==========
 with st.sidebar.expander("📊 长线指标（可增减）", expanded=True):
     use_ma = st.checkbox("MA (均线排列)", key='use_ma')
     st.caption("多周期均线位置与多头排列强度。")
@@ -253,7 +249,7 @@ def load_data(stock_code):
                 st.error(f"数据获取失败，已重试{max_retries}次。错误: {e}")
                 return None
 
-# ========== 指标计算引擎（KDJ 使用可调周期） ==========
+# ========== 指标计算引擎 ==========
 def compute_all_features(df):
     close = df["close"]
     high = df["high"]
@@ -417,7 +413,7 @@ def compute_all_features(df):
 
     return features
 
-# ========== 主分析 ==========
+# ========== 主分析（支持自定义日期） ==========
 if st.button("🔍 开始分析"):
     if not code:
         st.warning("请输入股票代码")
@@ -432,65 +428,85 @@ if st.button("🔍 开始分析"):
             if len(combined) < 252:
                 st.error("有效历史数据不足，至少需1年以上")
             else:
-                feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
-                current_feat = combined[feature_cols].iloc[-1:].values
-                hist_feat = combined[feature_cols].iloc[:-20].values
-
-                if len(hist_feat) < 50:
-                    st.warning("历史相似样本数较少，结果可能有偏差")
-
-                scaler = StandardScaler()
-                scaler.fit(hist_feat)
-                hist_feat_scaled = scaler.transform(hist_feat)
-                current_feat_scaled = scaler.transform(current_feat)
-
-                sim = cosine_similarity(current_feat_scaled, hist_feat_scaled)[0]
-                top_k = min(50, len(sim))
-                top_idx = np.argsort(sim)[-top_k:][::-1]
-                sim_scores = sim[top_idx]
-
-                close_series = combined["close"].reset_index(drop=True)
-                rets = []
-                for idx in top_idx:
-                    if idx + days_hold < len(close_series):
-                        ret = (close_series.iloc[idx + days_hold] / close_series.iloc[idx]) - 1
-                        rets.append(ret)
-
-                if len(rets) < 10:
-                    st.error("有效相似样本太少，无法统计")
+                # 寻找分析日期在 combined 中的位置
+                target_date = pd.to_datetime(analysis_date)
+                date_rows = combined[combined["date"] == target_date]
+                if date_rows.empty:
+                    st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值，请换一个交易日。")
                 else:
-                    ret_arr = np.array(rets)
-                    win_rate = (ret_arr > 0).mean()
-                    avg_ret = ret_arr.mean()
-                    pos = ret_arr[ret_arr > 0]
-                    neg = ret_arr[ret_arr < 0]
-                    if len(pos) > 0 and len(neg) > 0:
-                        pl_ratio = pos.mean() / abs(neg.mean())
+                    target_idx = date_rows.index[0]
+                    target_close = combined.loc[target_idx, "close"]
+                    st.success(f"📌 {target_date.date()} 收盘价：{target_close:.2f} 元")
+
+                    feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
+                    current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
+
+                    # 历史特征：排除目标日期前后各20天，防止未来信息或数据泄漏
+                    exclude_start = max(0, target_idx - 20)
+                    exclude_end = min(len(combined), target_idx + 21)  # +21 因为 python 切片右开
+                    hist_mask = np.ones(len(combined), dtype=bool)
+                    hist_mask[exclude_start:exclude_end] = False
+                    hist_feat = combined.loc[hist_mask, feature_cols].values
+
+                    if len(hist_feat) < 50:
+                        st.warning("排除分析日期附近后，历史相似样本数较少，结果可能有偏差")
+
+                    # 标准化与余弦相似度
+                    scaler = StandardScaler()
+                    scaler.fit(hist_feat)
+                    hist_feat_scaled = scaler.transform(hist_feat)
+                    current_feat_scaled = scaler.transform(current_feat)
+
+                    sim = cosine_similarity(current_feat_scaled, hist_feat_scaled)[0]
+                    top_k = min(50, len(sim))
+                    top_idx = np.argsort(sim)[-top_k:][::-1]
+                    # 将 top_idx 映射回 combined 中的实际索引
+                    hist_combined_idx = combined.loc[hist_mask].index.values
+                    matched_indices = hist_combined_idx[top_idx]
+                    sim_scores = sim[top_idx]
+
+                    close_series = combined["close"].reset_index(drop=True)
+                    rets = []
+                    for idx in matched_indices:
+                        if idx + days_hold < len(close_series):
+                            ret = (close_series.iloc[idx + days_hold] / close_series.iloc[idx]) - 1
+                            rets.append(ret)
+
+                    if len(rets) < 10:
+                        st.error("有效相似样本太少，无法统计")
                     else:
-                        pl_ratio = np.inf if len(neg) == 0 else 0
+                        ret_arr = np.array(rets)
+                        win_rate = (ret_arr > 0).mean()
+                        avg_ret = ret_arr.mean()
+                        pos = ret_arr[ret_arr > 0]
+                        neg = ret_arr[ret_arr < 0]
+                        if len(pos) > 0 and len(neg) > 0:
+                            pl_ratio = pos.mean() / abs(neg.mean())
+                        else:
+                            pl_ratio = np.inf if len(neg) == 0 else 0
 
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("上涨概率", f"{win_rate:.1%}")
-                    col2.metric("平均收益", f"{avg_ret:.2%}")
-                    col3.metric("盈亏比", f"{pl_ratio:.2f}")
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("上涨概率", f"{win_rate:.1%}")
+                        col2.metric("平均收益", f"{avg_ret:.2%}")
+                        col3.metric("盈亏比", f"{pl_ratio:.2f}")
 
-                    if win_rate > 0.55 and avg_ret > 0:
-                        st.success("✅ 概率买点信号")
-                    else:
-                        st.info("ℹ️ 未达到高概率买点标准")
+                        if win_rate > 0.55 and avg_ret > 0:
+                            st.success("✅ 概率买点信号")
+                        else:
+                            st.info("ℹ️ 未达到高概率买点标准")
 
-                    fig = px.histogram(ret_arr, nbins=20,
-                                       title=f"相似历史持有{days_hold}天收益分布",
-                                       labels={"value": "收益率"}, opacity=0.7)
-                    fig.add_vline(x=0, line_dash="dash", line_color="red")
-                    st.plotly_chart(fig, use_container_width=True)
+                        fig = px.histogram(ret_arr, nbins=20,
+                                           title=f"相似历史持有{days_hold}天收益分布",
+                                           labels={"value": "收益率"}, opacity=0.7)
+                        fig.add_vline(x=0, line_dash="dash", line_color="red")
+                        st.plotly_chart(fig, use_container_width=True)
 
-                    with st.expander("查看相似历史日期及相似度"):
-                        match_dates = combined["date"].iloc[top_idx].reset_index(drop=True)
-                        sim_df = pd.DataFrame({
-                            "历史日期": match_dates.values[:len(sim_scores)],
-                            "相似度": sim_scores
-                        })
-                        st.dataframe(sim_df.head(20))
+                        with st.expander("查看相似历史日期及相似度"):
+                            match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
+                            sim_df = pd.DataFrame({
+                                "历史日期": match_dates.values[:len(sim_scores)],
+                                "相似度": sim_scores
+                            })
+                            st.dataframe(sim_df.head(20))
 
-                    st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
+                        st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
