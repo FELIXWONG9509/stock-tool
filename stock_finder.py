@@ -6,6 +6,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 from datetime import datetime, timedelta
+import requests
+import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.title("📈 多技术指标 · 历史相似匹配获利概率")
@@ -114,25 +116,35 @@ if not selected_any:
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 数据获取 ==========
+# ========== 数据获取（已加重试和伪装头） ==========
 @st.cache_data
 def load_data(stock_code):
-    try:
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=5*365)).strftime("%Y%m%d")
-        df = ak.stock_zh_a_hist(symbol=stock_code, period="daily",
-                                start_date=start_date, end_date=end_date, adjust="qfq")
-        if df.empty:
-            return None
-        df = df.rename(columns={"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume"})
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.sort_values("date").reset_index(drop=True)
-        return df
-    except Exception as e:
-        st.error(f"数据获取失败: {e}")
-        return None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            end_date = datetime.now().strftime("%Y%m%d")
+            start_date = (datetime.now() - timedelta(days=5*365)).strftime("%Y%m%d")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            ak.set_headers(headers)
+            df = ak.stock_zh_a_hist(symbol=stock_code, period="daily",
+                                    start_date=start_date, end_date=end_date, adjust="qfq")
+            if df.empty:
+                return None
+            df = df.rename(columns={"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume"})
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date").reset_index(drop=True)
+            return df
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            else:
+                st.error(f"数据获取失败，已重试{max_retries}次。错误: {e}")
+                return None
 
-# ========== 手动指标计算库（无需 pandas_ta） ==========
+# ========== 手动指标计算库 ==========
 def compute_all_features(df):
     close = df["close"]
     high = df["high"]
@@ -180,7 +192,7 @@ def compute_all_features(df):
         high_n = high.rolling(wr_period).max()
         low_n = low.rolling(wr_period).min()
         wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
-        features["wr"] = wr / -100.0  # 映射到 0~1
+        features["wr"] = wr / -100.0
 
     if use_bias:
         ma = close.rolling(bias_period).mean()
@@ -232,12 +244,11 @@ def compute_all_features(df):
         features["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
 
     if use_sar:
-        # 经典SAR算法（简化实现）
         af = 0.02
         max_af = 0.2
         sar = pd.Series(np.nan, index=close.index)
         ep = low.copy()
-        trend = pd.Series(1, index=close.index)  # 1 上升, -1 下降
+        trend = pd.Series(1, index=close.index)
         for i in range(1, len(close)):
             if trend.iloc[i-1] == 1:
                 sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
@@ -265,7 +276,6 @@ def compute_all_features(df):
                         af = min(af + 0.02, max_af)
                     else:
                         ep.iloc[i] = ep.iloc[i-1]
-        # 用第一天数据填充第一个SAR
         sar.iloc[0] = close.iloc[0]
         features["sar_dist"] = (close - sar) / close
 
