@@ -6,16 +6,44 @@ from sklearn.metrics.pairwise import cosine_similarity
 import plotly.express as px
 from datetime import datetime, timedelta
 
-# ---------- 页面设置 ----------
-st.set_page_config(page_title="历史相似买点概率", layout="wide")
-st.title("📈 相似历史匹配 · 获利概率评估")
-st.caption("比较当前技术指标与历史每一天的相似度，统计历史上相似情况下的上涨概率。")
+st.set_page_config(page_title="自定义指标历史相似概率", layout="wide")
+st.title("📈 自选技术指标 · 历史相似匹配获利概率")
+st.caption("选择你关注的技术指标及参数，寻找历史上最相似的时刻，计算后续上涨概率。")
 
-# ---------- 用户输入 ----------
-code = st.text_input("请输入股票代码（如 000001 或 600519）", "000001")
-days_hold = st.selectbox("选择持仓周期", [5, 10, 20], index=1)
+code = st.text_input("股票代码（如 600887）", "600887")
+days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 30], index=2)
 
-# ---------- 数据获取函数 ----------
+# ----- 指标选择区 -----
+st.sidebar.header("🔧 选择技术指标组合")
+st.sidebar.markdown("勾选你想使用的指标，并可调整参数（右侧会显示当期数值范围）")
+
+use_skdj = st.sidebar.checkbox("SKDJ (慢速随机指标)", value=True)
+skdj_n = st.sidebar.slider("SKDJ 参数 N (快线周期)", 5, 30, 9)
+skdj_m = st.sidebar.slider("SKDJ 参数 M (慢线周期)", 2, 10, 3)
+
+use_rsi = st.sidebar.checkbox("RSI (相对强弱指标)", value=True)
+rsi_period = st.sidebar.slider("RSI 周期", 5, 30, 14)
+
+use_macd = st.sidebar.checkbox("MACD 柱", value=True)
+macd_fast = st.sidebar.slider("MACD 快线", 5, 30, 12)
+macd_slow = st.sidebar.slider("MACD 慢线", 10, 40, 26)
+macd_signal = st.sidebar.slider("MACD 信号线", 5, 15, 9)
+
+use_bb = st.sidebar.checkbox("布林带位置", value=True)
+bb_period = st.sidebar.slider("布林带周期", 10, 50, 20)
+bb_std = st.sidebar.slider("布林带标准差倍数", 1, 4, 2)
+
+use_vol = st.sidebar.checkbox("量比", value=True)
+vol_period = st.sidebar.slider("均量周期", 5, 30, 20)
+
+use_trend = st.sidebar.checkbox("短期趋势强度 (5日/20日线)", value=True)
+
+# 必须至少选一个指标
+if not any([use_skdj, use_rsi, use_macd, use_bb, use_vol, use_trend]):
+    st.error("请在左侧至少选择一个技术指标！")
+    st.stop()
+
+# ----- 数据获取 -----
 @st.cache_data
 def load_data(stock_code):
     try:
@@ -25,14 +53,7 @@ def load_data(stock_code):
                                 start_date=start_date, end_date=end_date, adjust="qfq")
         if df.empty:
             return None
-        df = df.rename(columns={
-            "日期": "date",
-            "开盘": "open",
-            "收盘": "close",
-            "最高": "high",
-            "最低": "low",
-            "成交量": "volume",
-        })
+        df = df.rename(columns={"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume"})
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
         return df
@@ -40,103 +61,109 @@ def load_data(stock_code):
         st.error(f"数据获取失败: {e}")
         return None
 
-# ---------- 指标计算 ----------
-def compute_features(df):
+# ----- 指标计算引擎 -----
+def compute_all_features(df):
     close = df["close"]
+    high = df["high"]
+    low = df["low"]
     volume = df["volume"]
+    features = pd.DataFrame(index=df.index)
 
-    # RSI(14)
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
+    if use_skdj:
+        # SKDJ 计算：先算 RSV，再求 K/D 的慢速平滑
+        low_n = low.rolling(window=skdj_n).min()
+        high_n = high.rolling(window=skdj_n).max()
+        rsv = (close - low_n) / (high_n - low_n + 1e-10) * 100
+        # 普通 KDJ 的 K、D
+        k = rsv.ewm(alpha=1/skdj_m, adjust=False).mean()
+        d = k.ewm(alpha=1/skdj_m, adjust=False).mean()
+        # SKDJ 的 K 就是普通 KDJ 的 D，D 是 D 的再移动平均，但这里采用常见实现：直接用 (k+d)/2 作为单值，或 K 和 D 分别作为两个特征
+        # 为简化，我们只取 SKDJ_K 和 SKDJ_D 两个值
+        skdj_k = d  # 这是慢速 K
+        skdj_d = d.ewm(alpha=1/skdj_m, adjust=False).mean()  # 慢速 D
+        features["skdj_k"] = skdj_k / 100.0   # 归一化到 0-1
+        features["skdj_d"] = skdj_d / 100.0
 
-    # 布林带位置 (20,2)
-    bb_mid = close.rolling(20).mean()
-    bb_std = close.rolling(20).std()
-    bb_upper = bb_mid + 2*bb_std
-    bb_lower = bb_mid - 2*bb_std
-    bb_position = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
+    if use_rsi:
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
+        avg_gain = gain.rolling(rsi_period).mean()
+        avg_loss = loss.rolling(rsi_period).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        features["rsi"] = rsi / 100.0
 
-    # 量比
-    vol_ratio = volume / volume.rolling(20).mean()
+    if use_macd:
+        ema_fast = close.ewm(span=macd_fast).mean()
+        ema_slow = close.ewm(span=macd_slow).mean()
+        macd_line = ema_fast - ema_slow
+        signal = macd_line.ewm(span=macd_signal).mean()
+        macd_hist = macd_line - signal
+        # 用除以收盘价做归一化
+        features["macd_hist_norm"] = macd_hist / (close + 1e-10)
 
-    # 收盘价距年内高点比例
-    year_high = close.rolling(250).max()
-    close_to_high = (close - year_high) / (year_high + 1e-10)
+    if use_bb:
+        bb_mid = close.rolling(bb_period).mean()
+        bb_std_val = close.rolling(bb_period).std()
+        bb_upper = bb_mid + bb_std*bb_std_val
+        bb_lower = bb_mid - bb_std*bb_std_val
+        features["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
 
-    # MACD柱 标准化
-    ema12 = close.ewm(span=12).mean()
-    ema26 = close.ewm(span=26).mean()
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9).mean()
-    macd_hist = macd_line - signal_line
-    macd_norm = macd_hist / (close + 1e-10)
+    if use_vol:
+        features["vol_ratio"] = volume / volume.rolling(vol_period).mean()
 
-    # 趋势强度 (5日与20日线差)
-    ma5 = close.rolling(5).mean()
-    ma20 = close.rolling(20).mean()
-    trend_strength = (ma5 - ma20) / (close + 1e-10)
+    if use_trend:
+        ma5 = close.rolling(5).mean()
+        ma20 = close.rolling(20).mean()
+        features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
-    features = pd.DataFrame({
-        "rsi": rsi,
-        "bb_position": bb_position,
-        "vol_ratio": vol_ratio,
-        "close_to_high": close_to_high,
-        "macd_norm": macd_norm,
-        "trend_strength": trend_strength,
-    })
     return features
 
-# ---------- 主分析逻辑 ----------
-if st.button("开始分析"):
+# ----- 主逻辑 -----
+if st.button("🔍 开始分析"):
     if not code:
         st.warning("请输入股票代码")
     else:
-        with st.spinner("正在获取数据并计算指标..."):
+        with st.spinner("下载数据并计算指标..."):
             data = load_data(code)
         if data is None:
-            st.error("未获取到数据，请检查代码是否正确（如 000001 或 600519）")
+            st.error("无法获取数据，请检查代码是否正确")
         else:
-            features = compute_features(data)
+            features = compute_all_features(data)
             combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
             if len(combined) < 252:
-                st.error("可用历史数据不足，至少需要1年以上数据。")
+                st.error("有效历史数据不足，至少需1年以上")
             else:
-                current = features.iloc[-1:].values
-                hist = features.iloc[:-20].dropna().values
-                hist_dates = combined["date"].iloc[:-20].reset_index(drop=True)
+                # 当前最新特征（最后一行）
+                current_feat = features.iloc[-1:].values
+                # 历史特征（排除最近20天，防止未来信息）
+                hist_feat = features.iloc[:-20].values
+                if len(hist_feat) < 50:
+                    st.warning("历史相似样本数较少，结果可能有偏差")
 
-                if len(hist) < 50:
-                    st.warning("历史相似样本数不足，结果仅供参考。")
-
-                sim = cosine_similarity(current, hist)[0]
+                # 余弦相似度
+                sim = cosine_similarity(current_feat, hist_feat)[0]
                 top_k = min(50, len(sim))
                 top_idx = np.argsort(sim)[-top_k:][::-1]
                 sim_scores = sim[top_idx]
 
+                # 计算未来收益
                 close_series = combined["close"].reset_index(drop=True)
-                matched_indices = top_idx
-                future_returns = []
-                for idx in matched_indices:
+                rets = []
+                for idx in top_idx:
                     if idx + days_hold < len(close_series):
                         ret = (close_series.iloc[idx + days_hold] / close_series.iloc[idx]) - 1
-                        future_returns.append(ret)
-                if len(future_returns) < 10:
-                    st.error("有效相似样本太少，无法计算。")
+                        rets.append(ret)
+                if len(rets) < 10:
+                    st.error("有效相似样本太少，无法统计")
                 else:
-                    ret_arr = np.array(future_returns)
+                    ret_arr = np.array(rets)
                     win_rate = (ret_arr > 0).mean()
                     avg_ret = ret_arr.mean()
-                    positive = ret_arr[ret_arr > 0]
-                    negative = ret_arr[ret_arr < 0]
-                    if len(positive) > 0 and len(negative) > 0:
-                        pl_ratio = positive.mean() / abs(negative.mean())
-                    else:
-                        pl_ratio = np.inf if len(negative)==0 else 0
+                    pos = ret_arr[ret_arr > 0]
+                    neg = ret_arr[ret_arr < 0]
+                    pl_ratio = pos.mean() / abs(neg.mean()) if len(pos) and len(neg) else np.inf
 
                     col1, col2, col3 = st.columns(3)
                     col1.metric("上涨概率", f"{win_rate:.1%}")
@@ -144,21 +171,22 @@ if st.button("开始分析"):
                     col3.metric("盈亏比", f"{pl_ratio:.2f}")
 
                     if win_rate > 0.55 and avg_ret > 0:
-                        st.success("✅ 概率买点信号：历史相似情境下上涨概率较高且平均收益为正")
+                        st.success("✅ 概率买点信号")
                     else:
-                        st.info("ℹ️ 当前相似历史样本未达到高概率买点标准")
+                        st.info("ℹ️ 未达到高概率买点标准")
 
-                    fig = px.histogram(ret_arr, nbins=20, title=f"相似历史持有{days_hold}天收益分布",
-                                       labels={"value": "收益率"}, opacity=0.7)
+                    fig = px.histogram(ret_arr, nbins=20,
+                                       title=f"相似历史持有{days_hold}天收益分布",
+                                       labels={"value":"收益率"}, opacity=0.7)
                     fig.add_vline(x=0, line_dash="dash", line_color="red")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    with st.expander("查看匹配的历史日期及相似度"):
-                        match_dates = combined["date"].iloc[matched_indices].reset_index(drop=True)
+                    with st.expander("查看相似历史日期及相似度"):
+                        match_dates = combined["date"].iloc[top_idx].reset_index(drop=True)
                         sim_df = pd.DataFrame({
                             "历史日期": match_dates.values[:len(sim_scores)],
                             "相似度": sim_scores
                         })
                         st.dataframe(sim_df.head(20))
 
-                    st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅作统计参考，不构成投资建议。")
+                    st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
