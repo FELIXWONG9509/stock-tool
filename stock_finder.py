@@ -2,7 +2,6 @@ import streamlit as st
 import akshare as ak
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
@@ -19,17 +18,14 @@ days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200,
 if 'preset' not in st.session_state:
     st.session_state.preset = '自定义'
 
-# 定义所有指标 session key
 short_keys = ['use_kdj', 'use_skdj', 'use_rsi', 'use_wr', 'use_bias', 'use_cci', 'use_roc']
 long_keys = ['use_ma', 'use_macd', 'use_expma', 'use_boll', 'use_sar', 'use_dmi', 'use_obv', 'use_vol', 'use_trend']
 all_keys = short_keys + long_keys
 
-# 初始化 session_state
 for k in all_keys:
     if k not in st.session_state:
         st.session_state[k] = False
 
-# 预设选择
 preset = st.sidebar.selectbox("🎯 预设组合（快速勾选）", ["自定义", "短线波段组合", "长线趋势组合", "全能组合"], key='preset_select')
 if preset != st.session_state.preset:
     st.session_state.preset = preset
@@ -46,7 +42,6 @@ if preset != st.session_state.preset:
     elif preset == "全能组合":
         for k in all_keys:
             st.session_state[k] = True
-    # 自定义：保持当前勾选不变
     st.rerun()
 
 # ========== 短线指标区域 ==========
@@ -114,7 +109,6 @@ with st.sidebar.expander("📊 长线指标区域", expanded=True):
     use_trend = st.checkbox("短期趋势强度", key='use_trend')
     st.caption("5日与20日线的距离，正为多头。")
 
-# 至少勾选一个指标
 selected_any = any([st.session_state[k] for k in all_keys])
 if not selected_any:
     st.error("请在左侧至少选择一个技术指标！")
@@ -138,7 +132,7 @@ def load_data(stock_code):
         st.error(f"数据获取失败: {e}")
         return None
 
-# ========== 指标计算引擎（利用 pandas_ta） ==========
+# ========== 手动指标计算库（无需 pandas_ta） ==========
 def compute_all_features(df):
     close = df["close"]
     high = df["high"]
@@ -148,13 +142,21 @@ def compute_all_features(df):
 
     # ---- 短线指标 ----
     if use_kdj:
-        kdj = ta.kdj(high=high, low=low, close=close)
-        features["kdj_k"] = kdj.iloc[:,0] / 100.0
-        features["kdj_d"] = kdj.iloc[:,1] / 100.0
-        features["kdj_j"] = kdj.iloc[:,2] / 100.0
+        low_min = low.rolling(9).min()
+        high_max = high.rolling(9).max()
+        rsv = (close - low_min) / (high_max - low_min + 1e-10) * 100
+        k_val = rsv.copy()
+        d_val = rsv.copy()
+        for i in range(1, len(k_val)):
+            k_val.iloc[i] = 2/3 * k_val.iloc[i-1] + 1/3 * rsv.iloc[i]
+            d_val.iloc[i] = 2/3 * d_val.iloc[i-1] + 1/3 * k_val.iloc[i]
+        features["kdj_k"] = k_val / 100.0
+        features["kdj_d"] = d_val / 100.0
+        features["kdj_j"] = (3 * k_val - 2 * d_val) / 100.0
+
     if use_skdj:
-        low_n = low.rolling(window=skdj_n).min()
-        high_n = high.rolling(window=skdj_n).max()
+        low_n = low.rolling(skdj_n).min()
+        high_n = high.rolling(skdj_n).max()
         rsv = (close - low_n) / (high_n - low_n + 1e-10) * 100
         k = rsv.ewm(alpha=1/skdj_m, adjust=False).mean()
         d = k.ewm(alpha=1/skdj_m, adjust=False).mean()
@@ -163,23 +165,37 @@ def compute_all_features(df):
         features["skdj_k"] = skdj_k / 100.0
         features["skdj_d"] = skdj_d / 100.0
         features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
+
     if use_rsi:
-        rsi = ta.rsi(close=close, length=rsi_period)
+        delta = close.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.ewm(alpha=1/rsi_period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/rsi_period, adjust=False).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
         features["rsi"] = rsi / 100.0
+
     if use_wr:
-        wr = ta.willr(high=high, low=low, close=close, length=wr_period)
-        features["wr"] = (wr / -100.0)  # 0~1
+        high_n = high.rolling(wr_period).max()
+        low_n = low.rolling(wr_period).min()
+        wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
+        features["wr"] = wr / -100.0  # 映射到 0~1
+
     if use_bias:
         ma = close.rolling(bias_period).mean()
-        bias = (close - ma) / ma
-        features["bias"] = bias
+        features["bias"] = (close - ma) / ma
+
     if use_cci:
-        cci = ta.cci(high=high, low=low, close=close, length=cci_period)
-        # 归一化到约-1..1，除以200裁剪
-        cci_clip = cci.clip(-200, 200)
-        features["cci"] = cci_clip / 200.0
+        tp = (high + low + close) / 3
+        ma_tp = tp.rolling(cci_period).mean()
+        mad = tp.rolling(cci_period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
+        cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
+        cci_clipped = cci.clip(-200, 200)
+        features["cci"] = cci_clipped / 200.0
+
     if use_roc:
-        roc = ta.roc(close=close, length=roc_period)
+        roc = close.pct_change(roc_period) * 100
         features["roc"] = roc / 100.0
 
     # ---- 长线指标 ----
@@ -191,42 +207,95 @@ def compute_all_features(df):
         features["ma5_dist"] = (close - ma5) / close
         features["ma20_dist"] = (close - ma20) / close
         features["ma60_dist"] = (close - ma60) / close
-        # 多头排列强度：均线斜率比较（短均大于长均）
         features["ma_align"] = ((ma5 > ma10).astype(int) + (ma10 > ma20).astype(int) + (ma20 > ma60).astype(int)) / 3.0
+
     if use_macd:
-        macd = ta.macd(close=close, fast=macd_fast, slow=macd_slow, signal=macd_signal)
-        macd_hist = macd.iloc[:,1] - macd.iloc[:,2]  # 柱体
+        ema_fast = close.ewm(span=macd_fast).mean()
+        ema_slow = close.ewm(span=macd_slow).mean()
+        macd_line = ema_fast - ema_slow
+        signal = macd_line.ewm(span=macd_signal).mean()
+        macd_hist = macd_line - signal
         features["macd_hist_norm"] = macd_hist / (close + 1e-10)
+
     if use_expma:
-        ema_short = ta.ema(close=close, length=expma_short)
-        ema_long = ta.ema(close=close, length=expma_long)
+        ema_short = close.ewm(span=expma_short).mean()
+        ema_long = close.ewm(span=expma_long).mean()
         features["expma_short_dist"] = (close - ema_short) / close
         features["expma_long_dist"] = (close - ema_long) / close
         features["expma_diff"] = (ema_short - ema_long) / close
+
     if use_boll:
-        boll = ta.bbands(close=close, length=bb_period, std=bb_std)
-        bb_lower = boll.iloc[:,0]
-        bb_mid = boll.iloc[:,1]
-        bb_upper = boll.iloc[:,2]
+        bb_mid = close.rolling(bb_period).mean()
+        bb_std_val = close.rolling(bb_period).std()
+        bb_upper = bb_mid + bb_std * bb_std_val
+        bb_lower = bb_mid - bb_std * bb_std_val
         features["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
+
     if use_sar:
-        sar = ta.psar(high=high, low=low, close=close)
+        # 经典SAR算法（简化实现）
+        af = 0.02
+        max_af = 0.2
+        sar = pd.Series(np.nan, index=close.index)
+        ep = low.copy()
+        trend = pd.Series(1, index=close.index)  # 1 上升, -1 下降
+        for i in range(1, len(close)):
+            if trend.iloc[i-1] == 1:
+                sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
+                if low.iloc[i] < sar.iloc[i]:
+                    trend.iloc[i] = -1
+                    sar.iloc[i] = max(high.iloc[i], high.iloc[i-1]) if i>0 else high.iloc[i]
+                    ep.iloc[i] = low.iloc[i]
+                    af = 0.02
+                else:
+                    if high.iloc[i] > ep.iloc[i-1]:
+                        ep.iloc[i] = high.iloc[i]
+                        af = min(af + 0.02, max_af)
+                    else:
+                        ep.iloc[i] = ep.iloc[i-1]
+            else:
+                sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
+                if high.iloc[i] > sar.iloc[i]:
+                    trend.iloc[i] = 1
+                    sar.iloc[i] = min(low.iloc[i], low.iloc[i-1]) if i>0 else low.iloc[i]
+                    ep.iloc[i] = high.iloc[i]
+                    af = 0.02
+                else:
+                    if low.iloc[i] < ep.iloc[i-1]:
+                        ep.iloc[i] = low.iloc[i]
+                        af = min(af + 0.02, max_af)
+                    else:
+                        ep.iloc[i] = ep.iloc[i-1]
+        # 用第一天数据填充第一个SAR
+        sar.iloc[0] = close.iloc[0]
         features["sar_dist"] = (close - sar) / close
+
     if use_dmi:
-        dmi = ta.adx(high=high, low=low, close=close, length=dmi_period)
-        plus_di = dmi.iloc[:,0] / 100.0
-        minus_di = dmi.iloc[:,1] / 100.0
-        adx = dmi.iloc[:,2] / 100.0
-        features["dmi_plus"] = plus_di
-        features["dmi_minus"] = minus_di
-        features["dmi_adx"] = adx
-        features["dmi_diff"] = plus_di - minus_di
+        up_move = high.diff()
+        down_move = -low.diff()
+        pdm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        mdm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        atr = pd.Series(tr).ewm(alpha=1/dmi_period, adjust=False).mean()
+        pdm_smooth = pd.Series(pdm).ewm(alpha=1/dmi_period, adjust=False).mean()
+        mdm_smooth = pd.Series(mdm).ewm(alpha=1/dmi_period, adjust=False).mean()
+        pdi = 100 * pdm_smooth / atr
+        mdi = 100 * mdm_smooth / atr
+        dx = (abs(pdi - mdi) / (pdi + mdi + 1e-10)) * 100
+        adx = dx.ewm(alpha=1/dmi_period, adjust=False).mean()
+        features["dmi_plus"] = pdi / 100.0
+        features["dmi_minus"] = mdi / 100.0
+        features["dmi_adx"] = adx / 100.0
+        features["dmi_diff"] = (pdi - mdi) / 100.0
+
     if use_obv:
-        obv = ta.obv(close=close, volume=volume)
-        features["obv_change"] = obv.pct_change(5)  # 5日变化率
+        sign = np.sign(close.diff())
+        obv = (sign * volume).cumsum()
+        features["obv_change"] = obv.pct_change(5)
+
     if use_vol:
         vol_ma = volume.rolling(vol_period).mean()
         features["vol_ratio"] = volume / vol_ma
+
     if use_trend:
         ma5 = close.rolling(5).mean()
         ma20 = close.rolling(20).mean()
@@ -250,15 +319,12 @@ if st.button("🔍 开始分析"):
                 st.error("有效历史数据不足，至少需1年以上")
             else:
                 feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
-                # 当前最新特征（最后一行）
                 current_feat = combined[feature_cols].iloc[-1:].values
-                # 历史特征（排除最近20天，防止未来信息）
                 hist_feat = combined[feature_cols].iloc[:-20].values
 
                 if len(hist_feat) < 50:
                     st.warning("历史相似样本数较少，结果可能有偏差")
 
-                # 标准化（让不同量纲的指标公平比较）
                 scaler = StandardScaler()
                 scaler.fit(hist_feat)
                 hist_feat_scaled = scaler.transform(hist_feat)
