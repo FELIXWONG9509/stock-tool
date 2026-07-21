@@ -6,7 +6,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 from datetime import datetime, timedelta
-import requests
 import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
@@ -116,7 +115,7 @@ if not selected_any:
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 数据获取（已加重试和伪装头） ==========
+# ========== 数据获取（带重试，无额外请求头） ==========
 @st.cache_data
 def load_data(stock_code):
     max_retries = 3
@@ -124,10 +123,6 @@ def load_data(stock_code):
         try:
             end_date = datetime.now().strftime("%Y%m%d")
             start_date = (datetime.now() - timedelta(days=5*365)).strftime("%Y%m%d")
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
-            ak.set_headers(headers)
             df = ak.stock_zh_a_hist(symbol=stock_code, period="daily",
                                     start_date=start_date, end_date=end_date, adjust="qfq")
             if df.empty:
@@ -144,7 +139,7 @@ def load_data(stock_code):
                 st.error(f"数据获取失败，已重试{max_retries}次。错误: {e}")
                 return None
 
-# ========== 手动指标计算库 ==========
+# ========== 手动指标计算库（无需 pandas_ta） ==========
 def compute_all_features(df):
     close = df["close"]
     high = df["high"]
