@@ -10,54 +10,91 @@ import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.title("📈 多技术指标 · 历史相似匹配获利概率")
-st.caption("选择固定搭配或自由组合，并可调整各指标参数，寻找历史上最相似的时刻，计算后续上涨概率。")
+st.caption("选择分类固定搭配或自由组合，并可调整各指标参数，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 固定搭配定义（已移除短线/长线/全能组合） ==========
+# ========== 固定搭配定义（已分类，只保留指定组合） ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {
         "说明": "在下方短线/长线区域自由勾选指标，完全自定义。",
         "适合周期": "不限",
+        "类别": "",
         "keys": []
     },
+    # 一、趋势跟踪型
     "MA 双均线": {
         "说明": "利用MA均线排列及价格与多条均线的关系，判断趋势方向。适合有明显趋势的单边行情。",
         "适合周期": "20天 ~ 100天",
+        "类别": "趋势跟踪型",
         "keys": ["use_ma"]
     },
     "MACD + MA": {
         "说明": "用MACD判断动能变化，均线确认趋势方向，经典中长线趋势策略。",
         "适合周期": "20天 ~ 100天",
+        "类别": "趋势跟踪型",
         "keys": ["use_macd", "use_ma"]
     },
-    "KDJ + RSI": {
-        "说明": "KDJ捕捉短期拐点，RSI过滤极值区域，适合短线搏反弹/回调。",
+    # 二、震荡反转型
+    "BOLL + RSI": {
+        "说明": "布林带判断震荡区间，RSI捕捉超买超卖极点，适合横盘高抛低吸。",
+        "适合周期": "10天 ~ 30天",
+        "类别": "震荡反转型",
+        "keys": ["use_boll", "use_rsi"]
+    },
+    "KDJ + MA": {
+        "说明": "KDJ敏感捕捉短线拐点，MA确认支撑/压力，适合震荡中寻找转折。",
         "适合周期": "5天 ~ 20天",
-        "keys": ["use_kdj", "use_rsi"]
+        "类别": "震荡反转型",
+        "keys": ["use_kdj", "use_ma"]
+    },
+    # 三、短线交易型
+    "KDJ + VOL + MA": {
+        "说明": "KDJ发出信号，成交量验证，MA提供趋势背景，三重过滤提高短线胜率。",
+        "适合周期": "5天 ~ 10天",
+        "类别": "短线交易型",
+        "keys": ["use_kdj", "use_vol", "use_ma"]
+    },
+    "RSI + MACD + MA": {
+        "说明": "RSI找入场区，MACD确认动能反转，MA确认方向，适合快进快出。",
+        "适合周期": "5天 ~ 20天",
+        "类别": "短线交易型",
+        "keys": ["use_rsi", "use_macd", "use_ma"]
+    },
+    # 四、中线稳健型
+    "MACD + SAR + BOLL + MA": {
+        "说明": "MACD定方向，SAR做移动止损，布林带看波动，MA确认排列，适合稳健波段。",
+        "适合周期": "20天 ~ 100天",
+        "类别": "中线稳健型",
+        "keys": ["use_macd", "use_sar", "use_boll", "use_ma"]
     },
     "BOLL + MACD": {
-        "说明": "MACD确认突破方向，布林带判断波动区间，常用于波段交易。",
-        "适合周期": "10天 ~ 50天",
+        "说明": "MACD确认突破，布林带判断上下轨位置，经典中线波段策略。",
+        "适合周期": "20天 ~ 60天",
+        "类别": "中线稳健型",
         "keys": ["use_boll", "use_macd"]
-    },
-    "SKDJ + VOL": {
-        "说明": "慢速KDJ过滤杂讯，配合成交量验证，提高波段拐点可靠性。",
-        "适合周期": "10天 ~ 30天",
-        "keys": ["use_skdj", "use_vol"]
-    },
-    "DMI + MA": {
-        "说明": "DMI判断趋势有无及方向，均线确认排列，适合中大波段持有。",
-        "适合周期": "50天 ~ 150天",
-        "keys": ["use_dmi", "use_ma"]
-    },
-    "EXPMA + SAR": {
-        "说明": "EXPMA跟踪趋势，SAR提供动态止损位，适合单边行情。",
-        "适合周期": "20天 ~ 100天",
-        "keys": ["use_expma", "use_sar"]
     }
 }
+
+# 构建带分类前缀的显示名 -> 实际组合名的映射
+display_to_combo = {}
+combo_options = []
+# 先添加自定义
+combo_options.append("自定义（手动选择）")
+display_to_combo["自定义（手动选择）"] = "自定义（手动选择）"
+# 按类别添加
+categories = ["趋势跟踪型", "震荡反转型", "短线交易型", "中线稳健型"]
+for cat in categories:
+    # 获取该类别的组合
+    combos_in_cat = [(name, info) for name, info in FIXED_COMBOS.items() if info.get("类别") == cat]
+    if combos_in_cat:
+        # 添加一个类别标题作为不可选选项（用分隔符样式）
+        combo_options.append(f"── {cat} ──")
+        for name, info in combos_in_cat:
+            display_name = f"   {name}"  # 用空格缩进
+            combo_options.append(display_name)
+            display_to_combo[display_name] = name
 
 # 所有可能的指标 key
 short_keys = ['use_kdj', 'use_skdj', 'use_rsi', 'use_wr', 'use_bias', 'use_cci', 'use_roc']
@@ -71,25 +108,43 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
-# ========== 侧边栏：固定搭配选项卡 ==========
+# ========== 侧边栏：固定搭配选项卡（分类下拉） ==========
 with st.sidebar.expander("📦 固定搭配", expanded=True):
-    combo_choice = st.radio(
+    # 找到当前combo对应的显示名
+    current_display = None
+    for disp, combo in display_to_combo.items():
+        if combo == st.session_state.combo:
+            current_display = disp
+            break
+    if current_display is None:
+        current_display = "自定义（手动选择）"
+
+    selected_display = st.selectbox(
         "选择一组经典指标组合",
-        list(FIXED_COMBOS.keys()),
-        index=list(FIXED_COMBOS.keys()).index(st.session_state.combo)
+        combo_options,
+        index=combo_options.index(current_display) if current_display in combo_options else 0
     )
-    if combo_choice != st.session_state.combo:
-        st.session_state.combo = combo_choice
+
+    # 如果选中的是类别标题（不可用），自动切换到自定义
+    if selected_display.startswith("──"):
+        selected_display = "自定义（手动选择）"
+        st.warning("请选择一个具体组合，已自动切换为自定义模式。")
+
+    # 解析实际组合名
+    chosen_combo = display_to_combo.get(selected_display, "自定义（手动选择）")
+
+    if chosen_combo != st.session_state.combo:
+        st.session_state.combo = chosen_combo
         # 先全部取消
         for k in all_keys:
             st.session_state[k] = False
         # 再勾选该组合对应的指标
-        for k in FIXED_COMBOS[combo_choice]["keys"]:
+        for k in FIXED_COMBOS[chosen_combo]["keys"]:
             st.session_state[k] = True
         st.rerun()
 
-    info = FIXED_COMBOS[combo_choice]
-    st.caption(f"**{combo_choice}**")
+    info = FIXED_COMBOS[chosen_combo]
+    st.caption(f"**{chosen_combo}**")
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
