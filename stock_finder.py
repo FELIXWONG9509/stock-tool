@@ -88,8 +88,7 @@ FIXED_COMBOS = {
 
 # 构建显示名映射
 display_to_combo = {}
-combo_options = []
-combo_options.append("自定义（手动选择）")
+combo_options = ["自定义（手动选择）"]
 display_to_combo["自定义（手动选择）"] = "自定义（手动选择）"
 
 categories = ["趋势跟踪型", "震荡反转型", "短线交易型", "中线稳健型"]
@@ -413,7 +412,7 @@ def compute_all_features(df):
 
     return features
 
-# ========== 主分析（支持自定义日期） ==========
+# ========== 主分析 ==========
 if st.button("🔍 开始分析"):
     if not code:
         st.warning("请输入股票代码")
@@ -428,7 +427,6 @@ if st.button("🔍 开始分析"):
             if len(combined) < 252:
                 st.error("有效历史数据不足，至少需1年以上")
             else:
-                # 寻找分析日期在 combined 中的位置
                 target_date = pd.to_datetime(analysis_date)
                 date_rows = combined[combined["date"] == target_date]
                 if date_rows.empty:
@@ -441,9 +439,9 @@ if st.button("🔍 开始分析"):
                     feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
                     current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
 
-                    # 历史特征：排除目标日期前后各20天，防止未来信息或数据泄漏
+                    # 排除分析日期前后各20天
                     exclude_start = max(0, target_idx - 20)
-                    exclude_end = min(len(combined), target_idx + 21)  # +21 因为 python 切片右开
+                    exclude_end = min(len(combined), target_idx + 21)
                     hist_mask = np.ones(len(combined), dtype=bool)
                     hist_mask[exclude_start:exclude_end] = False
                     hist_feat = combined.loc[hist_mask, feature_cols].values
@@ -451,7 +449,6 @@ if st.button("🔍 开始分析"):
                     if len(hist_feat) < 50:
                         st.warning("排除分析日期附近后，历史相似样本数较少，结果可能有偏差")
 
-                    # 标准化与余弦相似度
                     scaler = StandardScaler()
                     scaler.fit(hist_feat)
                     hist_feat_scaled = scaler.transform(hist_feat)
@@ -460,11 +457,26 @@ if st.button("🔍 开始分析"):
                     sim = cosine_similarity(current_feat_scaled, hist_feat_scaled)[0]
                     top_k = min(50, len(sim))
                     top_idx = np.argsort(sim)[-top_k:][::-1]
-                    # 将 top_idx 映射回 combined 中的实际索引
                     hist_combined_idx = combined.loc[hist_mask].index.values
                     matched_indices = hist_combined_idx[top_idx]
                     sim_scores = sim[top_idx]
 
+                    # ---------- 展示当前指标数值 ----------
+                    with st.expander("📊 当前分析日期的技术指标数值"):
+                        current_series = combined.loc[target_idx, feature_cols]
+                        current_df = pd.DataFrame({"指标": current_series.index, "数值": current_series.values})
+                        st.dataframe(current_df.set_index("指标"), use_container_width=True)
+
+                    # ---------- 展示相似历史指标数值（前5个） ----------
+                    with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
+                        top_n_show = min(5, len(matched_indices))
+                        top_match_indices = matched_indices[:top_n_show]
+                        sim_indicators = combined.loc[top_match_indices, ["date"] + feature_cols].copy()
+                        sim_indicators["日期"] = sim_indicators["date"].dt.date
+                        sim_indicators = sim_indicators.drop(columns=["date"]).set_index("日期")
+                        st.dataframe(sim_indicators, use_container_width=True)
+
+                    # ---------- 收益统计 ----------
                     close_series = combined["close"].reset_index(drop=True)
                     rets = []
                     for idx in matched_indices:
