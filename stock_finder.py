@@ -192,14 +192,27 @@ if not selected_any:
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 数据获取 ==========
+# ========== 数据获取（按上市时间取全部历史，无5年限制） ==========
 @st.cache_data
-def load_data(stock_code):
-    max_retries = 3
+def load_data(stock_code, analysis_date):
+    import random
+    max_retries = 8
     for attempt in range(max_retries):
         try:
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=5*365)).strftime("%Y%m%d")
+            # 尝试获取上市时间
+            try:
+                info = ak.stock_individual_info_em(symbol=stock_code)
+                list_date_str = info.loc[info["item"] == "上市时间", "value"].values[0]
+                list_date = pd.to_datetime(list_date_str)
+                total_days = (pd.to_datetime(analysis_date) - list_date).days
+                request_days = max(total_days, 60)  # 最少60天
+            except:
+                # 查不到上市时间，回退取5年
+                request_days = 5 * 365
+
+            end_date = pd.to_datetime(analysis_date).strftime("%Y%m%d")
+            start_date = (pd.to_datetime(analysis_date) - timedelta(days=request_days)).strftime("%Y%m%d")
+
             df = ak.stock_zh_a_hist(symbol=stock_code, period="daily",
                                     start_date=start_date, end_date=end_date, adjust="qfq")
             if df.empty:
@@ -210,7 +223,8 @@ def load_data(stock_code):
             return df
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(2)
+                wait_time = random.uniform(3, 6)
+                time.sleep(wait_time)
                 continue
             else:
                 st.error(f"数据获取失败，已重试{max_retries}次。错误: {e}")
@@ -386,7 +400,7 @@ if st.button("🔍 开始分析"):
         st.warning("请输入股票代码")
     else:
         with st.spinner("下载数据并计算指标..."):
-            data = load_data(code)
+            data = load_data(code, analysis_date)
         if data is None:
             st.error("无法获取数据，请检查代码是否正确")
         else:
