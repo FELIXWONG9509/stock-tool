@@ -56,6 +56,12 @@ FIXED_COMBOS = {
         "类别": "短线交易型",
         "keys": ["use_kdj", "use_rsi"]
     },
+    "SKDJ + RSI": {
+        "说明": "慢速KDJ过滤杂讯，结合RSI极值区域，提高短线反转信号可靠性。",
+        "适合周期": "5天 ~ 10天",
+        "类别": "短线交易型",
+        "keys": ["use_skdj", "use_rsi"]
+    },
     "KDJ + VOL + MA": {
         "说明": "KDJ发出信号，成交量验证，MA提供趋势背景，三重过滤提高短线胜率。",
         "适合周期": "5天 ~ 10天",
@@ -145,11 +151,10 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 参数统一调整区 ==========
+# ========== 参数统一调整区（新增KDJ周期） ==========
 with st.sidebar.expander("🔧 参数调整", expanded=True):
-    if st.session_state.use_ma:
-        ma_fast = st.slider("MA 快线周期", 2, 30, 5, key='ma_fast')
-        ma_slow = st.slider("MA 慢线周期", 5, 120, 20, key='ma_slow')
+    if st.session_state.use_kdj:
+        kdj_n = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n')
     if st.session_state.use_skdj:
         skdj_n = st.slider("SKDJ N", 5, 30, 9, key='skdj_n')
         skdj_m = st.slider("SKDJ M", 2, 10, 3, key='skdj_m')
@@ -163,6 +168,9 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
         cci_period = st.slider("CCI 周期", 5, 30, 20, key='cci_period')
     if st.session_state.use_roc:
         roc_period = st.slider("ROC 周期", 5, 30, 12, key='roc_period')
+    if st.session_state.use_ma:
+        ma_fast = st.slider("MA 快线周期", 2, 30, 5, key='ma_fast')
+        ma_slow = st.slider("MA 慢线周期", 5, 120, 20, key='ma_slow')
     if st.session_state.use_macd:
         macd_fast = st.slider("MACD 快线", 5, 30, 12, key='macd_fast')
         macd_slow = st.slider("MACD 慢线", 10, 40, 26, key='macd_slow')
@@ -245,7 +253,7 @@ def load_data(stock_code):
                 st.error(f"数据获取失败，已重试{max_retries}次。错误: {e}")
                 return None
 
-# ========== 指标计算引擎 ==========
+# ========== 指标计算引擎（KDJ 使用可调周期） ==========
 def compute_all_features(df):
     close = df["close"]
     high = df["high"]
@@ -254,8 +262,8 @@ def compute_all_features(df):
     features = pd.DataFrame(index=df.index)
 
     if use_kdj:
-        low_min = low.rolling(9).min()
-        high_max = high.rolling(9).max()
+        low_min = low.rolling(kdj_n).min()
+        high_max = high.rolling(kdj_n).max()
         rsv = (close - low_min) / (high_max - low_min + 1e-10) * 100
         k_val = rsv.copy()
         d_val = rsv.copy()
@@ -311,12 +319,11 @@ def compute_all_features(df):
         features["roc"] = roc / 100.0
 
     if use_ma:
-        # 使用用户设定的双均线周期
         ma_fast_val = close.rolling(ma_fast).mean()
         ma_slow_val = close.rolling(ma_slow).mean()
         features["ma_fast_dist"] = (close - ma_fast_val) / close
         features["ma_slow_dist"] = (close - ma_slow_val) / close
-        features["ma_cross"] = (ma_fast_val - ma_slow_val) / close  # 正值表示快线在慢线之上（多头）
+        features["ma_cross"] = (ma_fast_val - ma_slow_val) / close
 
     if use_macd:
         ema_fast = close.ewm(span=macd_fast).mean()
