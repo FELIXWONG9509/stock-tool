@@ -10,43 +10,104 @@ import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.title("📈 多技术指标 · 历史相似匹配获利概率")
-st.caption("短线/长线指标自由组合，寻找历史上最相似的时刻，计算后续上涨概率。")
+st.caption("短线/长线指标自由组合，或选用经典搭配，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 预设组合管理 ==========
-if 'preset' not in st.session_state:
-    st.session_state.preset = '自定义'
+# ========== 经典搭配定义 ==========
+# 格式: "搭配名称": {"说明": "...", "适合周期": "...", "勾选指标": [指标key列表]}
+PRESETS = {
+    "自定义": {
+        "说明": "手动在下方勾选想要的指标，完全自由组合。",
+        "适合周期": "不限",
+        "keys": []
+    },
+    "MACD + MA 趋势跟踪": {
+        "说明": "用MACD判断动能，均线排列判断方向，经典中长线趋势策略。",
+        "适合周期": "20天 ~ 100天",
+        "keys": ["use_macd", "use_ma"]
+    },
+    "KDJ + RSI 超买超卖": {
+        "说明": "KDJ捕捉短期拐点，RSI过滤极值区域，适合短线搏反弹/回调。",
+        "适合周期": "5天 ~ 20天",
+        "keys": ["use_kdj", "use_rsi"]
+    },
+    "BOLL + MACD 布林带突破": {
+        "说明": "MACD确认突破方向，布林带判断波动区间，常用于波段交易。",
+        "适合周期": "10天 ~ 50天",
+        "keys": ["use_boll", "use_macd"]
+    },
+    "SKDJ + VOL 量价配合": {
+        "说明": "慢速KDJ过滤杂讯，配合成交量验证，提高波段拐点可靠性。",
+        "适合周期": "10天 ~ 30天",
+        "keys": ["use_skdj", "use_vol"]
+    },
+    "DMI + MA 趋势强弱": {
+        "说明": "DMI判断趋势有无及方向，均线确认排列，适合中大波段持有。",
+        "适合周期": "50天 ~ 150天",
+        "keys": ["use_dmi", "use_ma"]
+    },
+    "EXPMA + SAR 移动止损": {
+        "说明": "EXPMA跟踪趋势，SAR提供动态止损位，适合单边行情。",
+        "适合周期": "20天 ~ 100天",
+        "keys": ["use_expma", "use_sar"]
+    },
+    "短线全能": {
+        "说明": "KDJ + SKDJ + RSI + WR + BIAS + CCI + ROC，全面监控短线状态。",
+        "适合周期": "5天 ~ 20天",
+        "keys": ["use_kdj", "use_skdj", "use_rsi", "use_wr", "use_bias", "use_cci", "use_roc"]
+    },
+    "长线全能": {
+        "说明": "MA + MACD + EXPMA + BOLL + SAR + DMI + OBV + VOL，全面监控趋势。",
+        "适合周期": "50天 ~ 200天",
+        "keys": ["use_ma", "use_macd", "use_expma", "use_boll", "use_sar", "use_dmi", "use_obv", "use_vol"]
+    },
+    "全能组合": {
+        "说明": "所有指标全部启用，综合评估市场状态。",
+        "适合周期": "不限",
+        "keys": ["use_kdj", "use_skdj", "use_rsi", "use_wr", "use_bias", "use_cci", "use_roc",
+                 "use_ma", "use_macd", "use_expma", "use_boll", "use_sar", "use_dmi", "use_obv", "use_vol", "use_trend"]
+    }
+}
 
+# 所有可能的指标 key
 short_keys = ['use_kdj', 'use_skdj', 'use_rsi', 'use_wr', 'use_bias', 'use_cci', 'use_roc']
 long_keys = ['use_ma', 'use_macd', 'use_expma', 'use_boll', 'use_sar', 'use_dmi', 'use_obv', 'use_vol', 'use_trend']
 all_keys = short_keys + long_keys
 
+# 初始化 session_state
 for k in all_keys:
     if k not in st.session_state:
         st.session_state[k] = False
+if 'preset' not in st.session_state:
+    st.session_state.preset = "自定义"
 
-preset = st.sidebar.selectbox("🎯 预设组合（快速勾选）", ["自定义", "短线波段组合", "长线趋势组合", "全能组合"], key='preset_select')
-if preset != st.session_state.preset:
-    st.session_state.preset = preset
-    if preset == "短线波段组合":
-        for k in short_keys:
-            st.session_state[k] = True
-        for k in long_keys:
-            st.session_state[k] = False
-    elif preset == "长线趋势组合":
-        for k in long_keys:
-            st.session_state[k] = True
-        for k in short_keys:
-            st.session_state[k] = False
-    elif preset == "全能组合":
-        for k in all_keys:
-            st.session_state[k] = True
+# ========== 侧边栏：经典搭配选择 ==========
+st.sidebar.header("📌 经典搭配")
+preset_choice = st.sidebar.selectbox(
+    "选择一个常用指标组合",
+    list(PRESETS.keys()),
+    index=list(PRESETS.keys()).index(st.session_state.preset)
+)
+
+# 如果搭配改变了，更新勾选状态
+if preset_choice != st.session_state.preset:
+    st.session_state.preset = preset_choice
+    # 先全部取消
+    for k in all_keys:
+        st.session_state[k] = False
+    # 再勾选这个搭配对应的指标
+    for k in PRESETS[preset_choice]["keys"]:
+        st.session_state[k] = True
     st.rerun()
 
-# ========== 短线指标区域 ==========
-with st.sidebar.expander("⚡ 短线指标区域", expanded=True):
+# 显示当前搭配的说明和周期
+info = PRESETS[preset_choice]
+st.sidebar.info(f"**{preset_choice}**  \n{info['说明']}  \n适合分析周期：{info['适合周期']}")
+
+# ========== 短线指标区域（可手动微调） ==========
+with st.sidebar.expander("⚡ 短线指标（可增减）", expanded=True):
     use_kdj = st.checkbox("KDJ (随机指标)", key='use_kdj')
     st.caption("K/D/J三线，反映超买超卖与交叉信号。")
     use_skdj = st.checkbox("SKDJ (慢速随机指标)", key='use_skdj')
@@ -75,8 +136,8 @@ with st.sidebar.expander("⚡ 短线指标区域", expanded=True):
     if use_roc:
         roc_period = st.slider("ROC 周期", 5, 30, 12)
 
-# ========== 长线指标区域 ==========
-with st.sidebar.expander("📊 长线指标区域", expanded=True):
+# ========== 长线指标区域（可手动微调） ==========
+with st.sidebar.expander("📊 长线指标（可增减）", expanded=True):
     use_ma = st.checkbox("MA (均线排列)", key='use_ma')
     st.caption("多周期均线位置与多头排列强度。")
     use_macd = st.checkbox("MACD", key='use_macd')
@@ -110,12 +171,13 @@ with st.sidebar.expander("📊 长线指标区域", expanded=True):
     use_trend = st.checkbox("短期趋势强度", key='use_trend')
     st.caption("5日与20日线的距离，正为多头。")
 
+# 确保至少选了一个指标
 selected_any = any([st.session_state[k] for k in all_keys])
 if not selected_any:
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 数据获取（带重试，无额外请求头） ==========
+# ========== 数据获取 ==========
 @st.cache_data
 def load_data(stock_code):
     max_retries = 3
@@ -139,7 +201,7 @@ def load_data(stock_code):
                 st.error(f"数据获取失败，已重试{max_retries}次。错误: {e}")
                 return None
 
-# ========== 手动指标计算库（无需 pandas_ta） ==========
+# ========== 指标计算引擎 ==========
 def compute_all_features(df):
     close = df["close"]
     high = df["high"]
@@ -147,7 +209,6 @@ def compute_all_features(df):
     volume = df["volume"]
     features = pd.DataFrame(index=df.index)
 
-    # ---- 短线指标 ----
     if use_kdj:
         low_min = low.rolling(9).min()
         high_max = high.rolling(9).max()
@@ -205,7 +266,6 @@ def compute_all_features(df):
         roc = close.pct_change(roc_period) * 100
         features["roc"] = roc / 100.0
 
-    # ---- 长线指标 ----
     if use_ma:
         ma5 = close.rolling(5).mean()
         ma10 = close.rolling(10).mean()
