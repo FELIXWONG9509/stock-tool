@@ -10,45 +10,49 @@ import time
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.title("📈 多技术指标 · 历史相似匹配获利概率")
-st.caption("短线/长线指标自由组合，或选用经典搭配，寻找历史上最相似的时刻，计算后续上涨概率。")
+st.caption("选择固定搭配或自由组合，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 code = st.text_input("股票代码（如 600887）", "600887")
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 经典搭配定义 ==========
-# 格式: "搭配名称": {"说明": "...", "适合周期": "...", "勾选指标": [指标key列表]}
-PRESETS = {
-    "自定义": {
-        "说明": "手动在下方勾选想要的指标，完全自由组合。",
+# ========== 固定搭配定义（新增选项） ==========
+FIXED_COMBOS = {
+    "自定义（手动选择）": {
+        "说明": "在下方短线/长线区域自由勾选指标，完全自定义。",
         "适合周期": "不限",
         "keys": []
     },
-    "MACD + MA 趋势跟踪": {
-        "说明": "用MACD判断动能，均线排列判断方向，经典中长线趋势策略。",
+    "MA 双均线": {
+        "说明": "利用MA均线排列及价格与多条均线的关系，判断趋势方向。适合有明显趋势的单边行情。",
+        "适合周期": "20天 ~ 100天",
+        "keys": ["use_ma"]
+    },
+    "MACD + MA": {
+        "说明": "用MACD判断动能变化，均线确认趋势方向，经典中长线趋势策略。",
         "适合周期": "20天 ~ 100天",
         "keys": ["use_macd", "use_ma"]
     },
-    "KDJ + RSI 超买超卖": {
+    "KDJ + RSI": {
         "说明": "KDJ捕捉短期拐点，RSI过滤极值区域，适合短线搏反弹/回调。",
         "适合周期": "5天 ~ 20天",
         "keys": ["use_kdj", "use_rsi"]
     },
-    "BOLL + MACD 布林带突破": {
+    "BOLL + MACD": {
         "说明": "MACD确认突破方向，布林带判断波动区间，常用于波段交易。",
         "适合周期": "10天 ~ 50天",
         "keys": ["use_boll", "use_macd"]
     },
-    "SKDJ + VOL 量价配合": {
+    "SKDJ + VOL": {
         "说明": "慢速KDJ过滤杂讯，配合成交量验证，提高波段拐点可靠性。",
         "适合周期": "10天 ~ 30天",
         "keys": ["use_skdj", "use_vol"]
     },
-    "DMI + MA 趋势强弱": {
+    "DMI + MA": {
         "说明": "DMI判断趋势有无及方向，均线确认排列，适合中大波段持有。",
         "适合周期": "50天 ~ 150天",
         "keys": ["use_dmi", "use_ma"]
     },
-    "EXPMA + SAR 移动止损": {
+    "EXPMA + SAR": {
         "说明": "EXPMA跟踪趋势，SAR提供动态止损位，适合单边行情。",
         "适合周期": "20天 ~ 100天",
         "keys": ["use_expma", "use_sar"]
@@ -80,33 +84,32 @@ all_keys = short_keys + long_keys
 for k in all_keys:
     if k not in st.session_state:
         st.session_state[k] = False
-if 'preset' not in st.session_state:
-    st.session_state.preset = "自定义"
+if 'combo' not in st.session_state:
+    st.session_state.combo = "自定义（手动选择）"
 
-# ========== 侧边栏：经典搭配选择 ==========
-st.sidebar.header("📌 经典搭配")
-preset_choice = st.sidebar.selectbox(
-    "选择一个常用指标组合",
-    list(PRESETS.keys()),
-    index=list(PRESETS.keys()).index(st.session_state.preset)
-)
+# ========== 侧边栏：固定搭配选项卡 ==========
+with st.sidebar.expander("📦 固定搭配", expanded=True):
+    combo_choice = st.radio(
+        "选择一组经典指标组合",
+        list(FIXED_COMBOS.keys()),
+        index=list(FIXED_COMBOS.keys()).index(st.session_state.combo)
+    )
+    if combo_choice != st.session_state.combo:
+        st.session_state.combo = combo_choice
+        # 先全部取消
+        for k in all_keys:
+            st.session_state[k] = False
+        # 再勾选该组合对应的指标
+        for k in FIXED_COMBOS[combo_choice]["keys"]:
+            st.session_state[k] = True
+        st.rerun()
 
-# 如果搭配改变了，更新勾选状态
-if preset_choice != st.session_state.preset:
-    st.session_state.preset = preset_choice
-    # 先全部取消
-    for k in all_keys:
-        st.session_state[k] = False
-    # 再勾选这个搭配对应的指标
-    for k in PRESETS[preset_choice]["keys"]:
-        st.session_state[k] = True
-    st.rerun()
+    info = FIXED_COMBOS[combo_choice]
+    st.caption(f"**{combo_choice}**")
+    st.caption(f"📖 {info['说明']}")
+    st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# 显示当前搭配的说明和周期
-info = PRESETS[preset_choice]
-st.sidebar.info(f"**{preset_choice}**  \n{info['说明']}  \n适合分析周期：{info['适合周期']}")
-
-# ========== 短线指标区域（可手动微调） ==========
+# ========== 短线指标区域（可微调） ==========
 with st.sidebar.expander("⚡ 短线指标（可增减）", expanded=True):
     use_kdj = st.checkbox("KDJ (随机指标)", key='use_kdj')
     st.caption("K/D/J三线，反映超买超卖与交叉信号。")
@@ -136,7 +139,7 @@ with st.sidebar.expander("⚡ 短线指标（可增减）", expanded=True):
     if use_roc:
         roc_period = st.slider("ROC 周期", 5, 30, 12)
 
-# ========== 长线指标区域（可手动微调） ==========
+# ========== 长线指标区域（可微调） ==========
 with st.sidebar.expander("📊 长线指标（可增减）", expanded=True):
     use_ma = st.checkbox("MA (均线排列)", key='use_ma')
     st.caption("多周期均线位置与多头排列强度。")
