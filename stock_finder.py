@@ -58,22 +58,24 @@ with col_up:
     uploaded_file = st.file_uploader("选择CSV文件（必需包含日期、开盘、收盘、最高、最低、成交量）", type="csv")
     if uploaded_file is not None:
         try:
-            # 先读取文件内容，判断是否有表头
-            content = uploaded_file.getvalue().decode("utf-8")
+            # 读取文件内容（自动处理BOM）
+            content = uploaded_file.getvalue().decode("utf-8-sig")
             lines = content.strip().split("\n")
+            if not lines:
+                st.error("文件为空。")
+                st.stop()
             first_line = lines[0].strip()
-            # 如果第一行是数字开头（如 2024-01-02），则认为是无表头原始数据
+            # 判断是否为无表头数据（第一行以数字开头，如“2024-01-02”）
             if first_line and first_line[0].isdigit():
-                # 东方财富API返回的字段顺序：
-                # 日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+                # 东方财富API返回的字段顺序（前6列）：
+                # 日期,开盘,收盘,最高,最低,成交量
                 columns = ["date","open","close","high","low","volume"]
-                # 读取时跳过表头行，手动设置列名
                 df_upload = pd.read_csv(io.StringIO(content), header=None)
-                # 只取前6列（日期、开盘、收盘、最高、最低、成交量）
-                df_upload = df_upload.iloc[:, [0,1,2,3,4,5]]
+                # 只取前6列
+                df_upload = df_upload.iloc[:, :6]
                 df_upload.columns = columns
             else:
-                # 有表头的情况，兼容中英文
+                # 有表头的情况（兼容中英文列名）
                 df_upload = pd.read_csv(io.StringIO(content))
                 rename_map = {
                     "日期": "date", "开盘": "open", "收盘": "close",
