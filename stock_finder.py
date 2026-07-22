@@ -26,11 +26,11 @@ def extract_code_from_filename(filename):
 default_code = st.session_state.get("auto_code", "600887")
 code = st.text_input("股票代码", value=default_code)
 
-# ---------- 数据下载按钮 ----------
+# ---------- 数据下载按钮（使用HTML超链接，实时更新） ----------
 secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
 download_url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000"
-st.link_button("🌐 打开数据下载页面（右键另存为 .json）", download_url)
-st.caption("点击上方按钮，在新页面中按 `Ctrl+S` 保存为 `股票代码.json`，然后上传至下方。")
+st.markdown(f'<a href="{download_url}" target="_blank">🌐 打开数据下载页面（在新标签页中打开，然后右键另存为 .json）</a>', unsafe_allow_html=True)
+st.caption("点击上方链接，在新页面中按 `Ctrl+S` 保存为 `股票代码.json`，然后上传至下方。")
 
 # ---------- 文件上传 ----------
 uploaded_file = st.file_uploader("📤 上传东方财富下载的 JSON 或 CSV 文件", type=["json", "csv"])
