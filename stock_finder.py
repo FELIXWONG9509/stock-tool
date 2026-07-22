@@ -22,6 +22,17 @@ def extract_code_from_filename(filename):
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
 
+# ---------- 股票代码输入 ----------
+default_code = st.session_state.get("auto_code", "600887")
+code = st.text_input("股票代码", value=default_code)
+
+# ---------- 数据下载按钮 ----------
+secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
+download_url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000"
+st.link_button("🌐 打开数据下载页面（右键另存为 .json）", download_url)
+st.caption("点击上方按钮，在新页面中按 `Ctrl+S` 保存为 `股票代码.json`，然后上传至下方。")
+
+# ---------- 文件上传 ----------
 uploaded_file = st.file_uploader("📤 上传东方财富下载的 JSON 或 CSV 文件", type=["json", "csv"])
 
 if uploaded_file is not None:
@@ -90,9 +101,6 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-default_code = st.session_state.get("auto_code", "600887")
-code = st.text_input("股票代码", value=default_code)
-
 analysis_date = st.date_input("📅 分析日期（默认今天）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
@@ -101,6 +109,7 @@ if "data" not in st.session_state:
     st.stop()
 data = st.session_state["data"]
 
+# ========== 固定搭配 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
@@ -236,7 +245,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 稳定指标计算（使用 pandas 平滑，确保无全零列） ==========
+# ========== 指标计算 ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -249,7 +258,6 @@ def compute_all_features(df, p):
         low_n = low.rolling(n).min()
         high_n = high.rolling(n).max()
         rsv = ((close - low_n) / (high_n - low_n + 1e-10)) * 100
-        # 使用 ewm 平滑，避免手动循环导致的初始零值陷阱
         k = rsv.ewm(alpha=1/3, adjust=False).mean()
         d = k.ewm(alpha=1/3, adjust=False).mean()
         j = 3 * k - 2 * d
@@ -262,10 +270,8 @@ def compute_all_features(df, p):
         low_n = low.rolling(n).min()
         high_n = high.rolling(n).max()
         rsv = ((close - low_n) / (high_n - low_n + 1e-10)) * 100
-        # 普通 KDJ 的 K、D
         k = rsv.ewm(alpha=1/3, adjust=False).mean()
         d = k.ewm(alpha=1/3, adjust=False).mean()
-        # 慢速平滑：再对 D 做两次平滑
         skdj_k = d.ewm(alpha=1/m, adjust=False).mean()
         skdj_d = skdj_k.ewm(alpha=1/m, adjust=False).mean()
         features["skdj_k"] = skdj_k / 100.0
@@ -403,7 +409,6 @@ def compute_all_features(df, p):
         ma20 = close.rolling(20).mean()
         features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
-    # 填充 NaN
     features = features.ffill().bfill().fillna(0)
     return features
 
@@ -438,12 +443,10 @@ if st.button("🔍 开始分析"):
             hist_mask[exclude_start:exclude_end] = False
             hist_feat = combined.loc[hist_mask, feature_cols].values
 
-            # 移除方差为零的列，但至少保留一列（如果只剩一列就保留）
             if hist_feat.shape[1] > 0:
                 std = np.std(hist_feat, axis=0)
                 zero_var_mask = std == 0
                 if zero_var_mask.all():
-                    # 所有列均常数，无法标准化，提示用户增加指标
                     st.error("当前所选指标生成的特征全部为常数，无法进行相似度分析。请至少再添加一个其他指标。")
                     st.stop()
                 elif zero_var_mask.any():
