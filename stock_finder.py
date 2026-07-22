@@ -236,103 +236,100 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 纯Python指标计算（末尾统一填充NaN） ==========
+# ========== 稳定指标计算（使用 pandas 平滑，确保无全零列） ==========
 def compute_all_features(df, p):
-    close = df["close"].values
-    high = df["high"].values
-    low = df["low"].values
-    volume = df["volume"].values
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    volume = df["volume"]
     features = pd.DataFrame(index=df.index)
 
     if p['use_kdj']:
         n = p['kdj_n']
-        low_list = pd.Series(low).rolling(n).min().values
-        high_list = pd.Series(high).rolling(n).max().values
-        rsv = np.where((high_list - low_list) != 0, (close - low_list) / (high_list - low_list) * 100, 0.0)
-        k = np.zeros_like(rsv)
-        d = np.zeros_like(rsv)
-        for i in range(1, len(rsv)):
-            k[i] = 2/3 * k[i-1] + 1/3 * rsv[i]
-            d[i] = 2/3 * d[i-1] + 1/3 * k[i]
+        low_n = low.rolling(n).min()
+        high_n = high.rolling(n).max()
+        rsv = ((close - low_n) / (high_n - low_n + 1e-10)) * 100
+        # 使用 ewm 平滑，避免手动循环导致的初始零值陷阱
+        k = rsv.ewm(alpha=1/3, adjust=False).mean()
+        d = k.ewm(alpha=1/3, adjust=False).mean()
+        j = 3 * k - 2 * d
         features["kdj_k"] = k / 100.0
         features["kdj_d"] = d / 100.0
-        features["kdj_j"] = (3 * k - 2 * d) / 100.0
+        features["kdj_j"] = j / 100.0
 
     if p['use_skdj']:
         n, m = p['skdj_n'], p['skdj_m']
-        low_n = pd.Series(low).rolling(n).min().values
-        high_n = pd.Series(high).rolling(n).max().values
-        rsv = np.where((high_n - low_n) != 0, (close - low_n) / (high_n - low_n) * 100, 0.0)
-        k_raw = np.zeros_like(rsv)
-        d_raw = np.zeros_like(rsv)
-        for i in range(1, len(rsv)):
-            k_raw[i] = 2/3 * k_raw[i-1] + 1/3 * rsv[i]
-            d_raw[i] = 2/3 * d_raw[i-1] + 1/3 * k_raw[i]
-        skdj_k = pd.Series(d_raw).ewm(alpha=1/m, adjust=False).mean().values
-        skdj_d = pd.Series(skdj_k).ewm(alpha=1/m, adjust=False).mean().values
+        low_n = low.rolling(n).min()
+        high_n = high.rolling(n).max()
+        rsv = ((close - low_n) / (high_n - low_n + 1e-10)) * 100
+        # 普通 KDJ 的 K、D
+        k = rsv.ewm(alpha=1/3, adjust=False).mean()
+        d = k.ewm(alpha=1/3, adjust=False).mean()
+        # 慢速平滑：再对 D 做两次平滑
+        skdj_k = d.ewm(alpha=1/m, adjust=False).mean()
+        skdj_d = skdj_k.ewm(alpha=1/m, adjust=False).mean()
         features["skdj_k"] = skdj_k / 100.0
         features["skdj_d"] = skdj_d / 100.0
         features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
 
     if p['use_rsi']:
         period = p['rsi_period']
-        delta = np.diff(close, prepend=close[0])
-        gain = np.maximum(delta, 0)
-        loss = -np.minimum(delta, 0)
-        avg_gain = pd.Series(gain).ewm(alpha=1/period, adjust=False).mean().values
-        avg_loss = pd.Series(loss).ewm(alpha=1/period, adjust=False).mean().values
+        delta = close.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
         rs = avg_gain / (avg_loss + 1e-10)
         rsi = 100 - (100 / (1 + rs))
         features["rsi"] = rsi / 100.0
 
     if p['use_wr']:
         period = p['wr_period']
-        high_n = pd.Series(high).rolling(period).max().values
-        low_n = pd.Series(low).rolling(period).min().values
+        high_n = high.rolling(period).max()
+        low_n = low.rolling(period).min()
         wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
         features["wr"] = wr / -100.0
 
     if p['use_bias']:
-        ma = pd.Series(close).rolling(p['bias_period']).mean().values
+        ma = close.rolling(p['bias_period']).mean()
         features["bias"] = (close - ma) / (ma + 1e-10)
 
     if p['use_cci']:
         tp = (high + low + close) / 3
-        ma_tp = pd.Series(tp).rolling(p['cci_period']).mean().values
-        mad = pd.Series(tp).rolling(p['cci_period']).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True).values
+        ma_tp = tp.rolling(p['cci_period']).mean()
+        mad = tp.rolling(p['cci_period']).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
         cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
-        features["cci"] = np.clip(cci, -200, 200) / 200.0
+        features["cci"] = cci.clip(-200, 200) / 200.0
 
     if p['use_roc']:
-        roc = (close[p['roc_period']:] - close[:-p['roc_period']]) / close[:-p['roc_period']] * 100
-        roc_full = np.concatenate([np.full(p['roc_period'], np.nan), roc])
-        features["roc"] = roc_full / 100.0
+        roc = close.pct_change(p['roc_period']) * 100
+        features["roc"] = roc / 100.0
 
     if p['use_ma']:
-        fast_ma = pd.Series(close).rolling(p['ma_fast']).mean().values
-        slow_ma = pd.Series(close).rolling(p['ma_slow']).mean().values
+        fast_ma = close.rolling(p['ma_fast']).mean()
+        slow_ma = close.rolling(p['ma_slow']).mean()
         features["ma_fast_dist"] = (close - fast_ma) / (close + 1e-10)
         features["ma_slow_dist"] = (close - slow_ma) / (close + 1e-10)
         features["ma_cross"] = (fast_ma - slow_ma) / (close + 1e-10)
 
     if p['use_macd']:
-        ema_fast = pd.Series(close).ewm(span=p['macd_fast']).mean().values
-        ema_slow = pd.Series(close).ewm(span=p['macd_slow']).mean().values
+        ema_fast = close.ewm(span=p['macd_fast']).mean()
+        ema_slow = close.ewm(span=p['macd_slow']).mean()
         macd_line = ema_fast - ema_slow
-        signal = pd.Series(macd_line).ewm(span=p['macd_signal']).mean().values
+        signal = macd_line.ewm(span=p['macd_signal']).mean()
         macd_hist = macd_line - signal
         features["macd_hist_norm"] = macd_hist / (close + 1e-10)
 
     if p['use_expma']:
-        ema_short = pd.Series(close).ewm(span=p['expma_short']).mean().values
-        ema_long = pd.Series(close).ewm(span=p['expma_long']).mean().values
+        ema_short = close.ewm(span=p['expma_short']).mean()
+        ema_long = close.ewm(span=p['expma_long']).mean()
         features["expma_short_dist"] = (close - ema_short) / (close + 1e-10)
         features["expma_long_dist"] = (close - ema_long) / (close + 1e-10)
         features["expma_diff"] = (ema_short - ema_long) / (close + 1e-10)
 
     if p['use_boll']:
-        mid = pd.Series(close).rolling(p['bb_period']).mean().values
-        std = pd.Series(close).rolling(p['bb_period']).std().values
+        mid = close.rolling(p['bb_period']).mean()
+        std = close.rolling(p['bb_period']).std()
         upper = mid + p['bb_std'] * std
         lower = mid - p['bb_std'] * std
         features["bb_position"] = (close - lower) / (upper - lower + 1e-10)
@@ -342,32 +339,32 @@ def compute_all_features(df, p):
         sar = np.zeros(len(close))
         ep = np.zeros(len(close))
         trend = np.ones(len(close))
-        sar[0], ep[0] = close[0], low[0]
+        sar[0], ep[0] = close.iloc[0], low.iloc[0]
         for i in range(1, len(close)):
             sar[i] = sar[i-1] + af * (ep[i-1] - sar[i-1])
             if trend[i-1] == 1:
-                if low[i] < sar[i]:
+                if low.iloc[i] < sar[i]:
                     trend[i] = -1
-                    sar[i] = max(high[i], high[i-1])
-                    ep[i] = low[i]
+                    sar[i] = max(high.iloc[i], high.iloc[i-1])
+                    ep[i] = low.iloc[i]
                     af = 0.02
                 else:
                     trend[i] = 1
-                    if high[i] > ep[i-1]:
-                        ep[i] = high[i]
+                    if high.iloc[i] > ep[i-1]:
+                        ep[i] = high.iloc[i]
                         af = min(af + 0.02, max_af)
                     else:
                         ep[i] = ep[i-1]
             else:
-                if high[i] > sar[i]:
+                if high.iloc[i] > sar[i]:
                     trend[i] = 1
-                    sar[i] = min(low[i], low[i-1])
-                    ep[i] = high[i]
+                    sar[i] = min(low.iloc[i], low.iloc[i-1])
+                    ep[i] = high.iloc[i]
                     af = 0.02
                 else:
                     trend[i] = -1
-                    if low[i] < ep[i-1]:
-                        ep[i] = low[i]
+                    if low.iloc[i] < ep[i-1]:
+                        ep[i] = low.iloc[i]
                         af = min(af + 0.02, max_af)
                     else:
                         ep[i] = ep[i-1]
@@ -375,38 +372,38 @@ def compute_all_features(df, p):
 
     if p['use_dmi']:
         period = p['dmi_period']
-        up_move = np.diff(high, prepend=high[0])
-        down_move = -np.diff(low, prepend=low[0])
+        up_move = high.diff()
+        down_move = -low.diff()
         pdm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         mdm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-        tr = np.maximum(high - low, np.abs(high - np.roll(close, 1)), np.abs(low - np.roll(close, 1)))
-        atr = pd.Series(tr).ewm(alpha=1/period, adjust=False).mean().values
-        pdm_smooth = pd.Series(pdm).ewm(alpha=1/period, adjust=False).mean().values
-        mdm_smooth = pd.Series(mdm).ewm(alpha=1/period, adjust=False).mean().values
-        pdi = 100 * pdm_smooth / (atr + 1e-10)
-        mdi = 100 * mdm_smooth / (atr + 1e-10)
+        tr = np.maximum(high - low, np.abs(high - close.shift(1)), np.abs(low - close.shift(1)))
+        atr = pd.Series(tr).ewm(alpha=1/period, adjust=False).mean()
+        pdm_s = pd.Series(pdm).ewm(alpha=1/period, adjust=False).mean()
+        mdm_s = pd.Series(mdm).ewm(alpha=1/period, adjust=False).mean()
+        pdi = 100 * pdm_s / (atr + 1e-10)
+        mdi = 100 * mdm_s / (atr + 1e-10)
         dx = np.abs(pdi - mdi) / (pdi + mdi + 1e-10) * 100
-        adx = pd.Series(dx).ewm(alpha=1/period, adjust=False).mean().values
+        adx = dx.ewm(alpha=1/period, adjust=False).mean()
         features["dmi_plus"] = pdi / 100.0
         features["dmi_minus"] = mdi / 100.0
         features["dmi_adx"] = adx / 100.0
         features["dmi_diff"] = (pdi - mdi) / 100.0
 
     if p['use_obv']:
-        sign = np.sign(np.diff(close, prepend=close[0]))
-        obv = np.cumsum(sign * volume)
-        features["obv_change"] = pd.Series(obv).pct_change(5).values
+        sign = np.sign(close.diff())
+        obv = (sign * volume).cumsum()
+        features["obv_change"] = obv.pct_change(5)
 
     if p['use_vol']:
-        vol_ma = pd.Series(volume).rolling(p['vol_period']).mean().values
+        vol_ma = volume.rolling(p['vol_period']).mean()
         features["vol_ratio"] = volume / vol_ma
 
     if p['use_trend']:
-        ma5 = pd.Series(close).rolling(5).mean().values
-        ma20 = pd.Series(close).rolling(20).mean().values
+        ma5 = close.rolling(5).mean()
+        ma20 = close.rolling(20).mean()
         features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
-    # ==== 关键修复：填充所有可能的 NaN，保证没有全空列 ====
+    # 填充 NaN
     features = features.ffill().bfill().fillna(0)
     return features
 
@@ -417,13 +414,10 @@ if st.button("🔍 开始分析"):
     else:
         features = compute_all_features(data, params)
         combined = pd.concat([data[["date","close"]], features], axis=1)
-
-        valid_cols = ["date", "close"] + [col for col in features.columns if features[col].notna().any()]
-        combined = combined[valid_cols]
         combined = combined.ffill().bfill().fillna(0)
 
         if len(combined) < 100:
-            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。")
+            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
         target_date = pd.to_datetime(analysis_date)
@@ -444,10 +438,15 @@ if st.button("🔍 开始分析"):
             hist_mask[exclude_start:exclude_end] = False
             hist_feat = combined.loc[hist_mask, feature_cols].values
 
+            # 移除方差为零的列，但至少保留一列（如果只剩一列就保留）
             if hist_feat.shape[1] > 0:
                 std = np.std(hist_feat, axis=0)
                 zero_var_mask = std == 0
-                if zero_var_mask.any():
+                if zero_var_mask.all():
+                    # 所有列均常数，无法标准化，提示用户增加指标
+                    st.error("当前所选指标生成的特征全部为常数，无法进行相似度分析。请至少再添加一个其他指标。")
+                    st.stop()
+                elif zero_var_mask.any():
                     feature_cols = [col for i, col in enumerate(feature_cols) if not zero_var_mask[i]]
                     current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
                     hist_feat = combined.loc[hist_mask, feature_cols].values
