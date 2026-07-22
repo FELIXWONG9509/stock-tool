@@ -97,7 +97,6 @@ if uploaded_file is not None:
 
         st.session_state["data"] = df_upload
         st.success(f"✅ 上传成功，共 {len(df_upload)} 条有效数据。")
-        st.write("📋 前3行收盘价：", df_upload["close"].head(3).tolist())
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
