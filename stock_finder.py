@@ -426,11 +426,11 @@ if st.button("🔍 开始分析"):
         features = compute_all_features(data, params)
         combined = pd.concat([data[["date","close"]], features], axis=1)
 
-        # 只保留非空的指标列（如果某列全NaN，直接丢弃，避免整行被删）
+        # 只保留非空的指标列（如果某列全NaN，直接丢弃）
         valid_cols = ["date", "close"] + [col for col in features.columns if features[col].notna().any()]
         combined = combined[valid_cols]
 
-        # 用前向/后向填充消除剩余NaN，再填充0确保安全
+        # 填充剩余NaN（先用前后值填充，最后填0）
         combined = combined.ffill().bfill().fillna(0)
 
         if len(combined) < 100:
@@ -455,8 +455,18 @@ if st.button("🔍 开始分析"):
             hist_mask[exclude_start:exclude_end] = False
             hist_feat = combined.loc[hist_mask, feature_cols].values
 
-            if len(hist_feat) < 30:
-                st.warning("相似样本较少，结果可能有偏差")
+            # 移除方差为零的特征列（防止标准化错误）
+            if hist_feat.shape[1] > 0:
+                std = np.std(hist_feat, axis=0)
+                zero_var_mask = std == 0
+                if zero_var_mask.any():
+                    feature_cols = [col for i, col in enumerate(feature_cols) if not zero_var_mask[i]]
+                    current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
+                    hist_feat = combined.loc[hist_mask, feature_cols].values
+
+            if len(hist_feat) < 30 or hist_feat.shape[1] == 0:
+                st.error("可用于分析的特征列不足，请尝试选择更多指标或调整参数。")
+                st.stop()
 
             scaler = StandardScaler()
             scaler.fit(hist_feat)
