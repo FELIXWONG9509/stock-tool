@@ -30,7 +30,7 @@ code = st.text_input("股票代码", value=default_code)
 secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
 download_url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000"
 st.link_button("🌐 打开数据下载页面（右键另存为 .json）", download_url)
-st.caption("点击上方按钮，在新页面中按 `Ctrl+S` 保存为 `股票代码.json`，然后上传至下方。")
+st.caption("点击上方按钮，在新页面中按 Ctrl+S 保存为 股票代码.json，然后上传至下方。")
 
 # ---------- 文件上传 ----------
 uploaded_file = st.file_uploader("📤 上传东方财富下载的 JSON 或 CSV 文件", type=["json", "csv"])
@@ -103,7 +103,7 @@ if uploaded_file is not None:
 analysis_date = st.date_input("📅 分析日期（默认今天）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 固定搭配 ==========
+# ========== 侧边栏 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
@@ -132,7 +132,6 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
-# ========== 侧边栏 ==========
 if st.sidebar.button("🔄 重置所有指标"):
     for k in all_keys:
         st.session_state[k] = False
@@ -240,13 +239,12 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 这行移到了侧边栏后面 ==========
 if "data" not in st.session_state:
     st.info("👆 请先上传历史数据文件（JSON 或 CSV）。")
     st.stop()
 data = st.session_state["data"]
 
-# ========== 指标计算 ==========
+# ========== 指标计算引擎 ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -469,14 +467,17 @@ if st.button("🔍 开始分析"):
             sim_scores = sim[top_idx]
 
             with st.expander("📊 当前分析日期的技术指标数值"):
-                cur_df = pd.DataFrame({"指标":feature_cols, "数值":combined.loc[target_idx, feature_cols].values})
-                st.dataframe(cur_df.set_index("指标"), use_container_width=True)
+                cur_df = pd.DataFrame({"指标名称": feature_cols, "当前数值": combined.loc[target_idx, feature_cols].values})
+                st.dataframe(cur_df.set_index("指标名称"), use_container_width=True)
 
             with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
                 top5 = matched_indices[:5]
                 sim_df = combined.loc[top5, ["date"]+feature_cols].copy()
                 sim_df["日期"] = sim_df["date"].dt.date
-                st.dataframe(sim_df.drop(columns="date").set_index("日期"), use_container_width=True)
+                sim_df = sim_df.drop(columns="date").set_index("日期")
+                # 将英文列名替换为可读的形式
+                sim_df.index.name = "历史日期"
+                st.dataframe(sim_df, use_container_width=True)
 
             close_series = combined["close"].reset_index(drop=True)
             rets = []
@@ -501,12 +502,25 @@ if st.button("🔍 开始分析"):
                     st.success("✅ 概率买点信号")
                 else:
                     st.info("ℹ️ 未达到高概率买点标准")
-                fig = px.histogram(ret_arr, nbins=20, title=f"相似历史持有{days_hold}天收益分布")
-                fig.add_vline(x=0, line_dash="dash", line_color="red")
+
+                # ---------- 全中文图表 ----------
+                fig = px.histogram(
+                    ret_arr,
+                    nbins=20,
+                    title=f"相似历史持有 {days_hold} 天的收益分布",
+                    labels={"value": "收益率", "count": "出现次数"},
+                    opacity=0.7,
+                )
+                fig.update_layout(
+                    xaxis_title="收益率",
+                    yaxis_title="出现次数",
+                    bargap=0.05,
+                )
+                fig.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="零收益线")
                 st.plotly_chart(fig, use_container_width=True)
 
                 with st.expander("相似历史日期及相似度"):
                     match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
-                    st.dataframe(pd.DataFrame({"历史日期":match_dates.values[:len(sim_scores)], "相似度":sim_scores}).head(20))
+                    st.dataframe(pd.DataFrame({"历史日期": match_dates.values[:len(sim_scores)], "相似度": sim_scores}).head(20))
 
                 st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
