@@ -104,11 +104,6 @@ if uploaded_file is not None:
 analysis_date = st.date_input("📅 分析日期（默认今天）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-if "data" not in st.session_state:
-    st.info("👆 请先上传历史数据文件（JSON 或 CSV）。")
-    st.stop()
-data = st.session_state["data"]
-
 # ========== 固定搭配 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
@@ -138,6 +133,7 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
+# ========== 侧边栏 ==========
 if st.sidebar.button("🔄 重置所有指标"):
     for k in all_keys:
         st.session_state[k] = False
@@ -244,6 +240,12 @@ with st.sidebar.expander("📊 长线指标", expanded=True):
 if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
+
+# ========== 这行移到了侧边栏后面 ==========
+if "data" not in st.session_state:
+    st.info("👆 请先上传历史数据文件（JSON 或 CSV）。")
+    st.stop()
+data = st.session_state["data"]
 
 # ========== 指标计算 ==========
 def compute_all_features(df, p):
