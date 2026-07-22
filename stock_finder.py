@@ -426,10 +426,12 @@ if st.button("🔍 开始分析"):
         features = compute_all_features(data, params)
         combined = pd.concat([data[["date","close"]], features], axis=1)
 
-        # 关键修复：用前向/后向填充消除因窗口计算产生的NaN，避免dropna误删整行
-        combined = combined.ffill().bfill()
-        # 此时理论上不应有NaN，但保留dropna以防万一
-        combined = combined.dropna()
+        # 只保留非空的指标列（如果某列全NaN，直接丢弃，避免整行被删）
+        valid_cols = ["date", "close"] + [col for col in features.columns if features[col].notna().any()]
+        combined = combined[valid_cols]
+
+        # 用前向/后向填充消除剩余NaN，再填充0确保安全
+        combined = combined.ffill().bfill().fillna(0)
 
         if len(combined) < 100:
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。")
@@ -438,7 +440,7 @@ if st.button("🔍 开始分析"):
         target_date = pd.to_datetime(analysis_date)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
-            st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值。")
+            st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
         else:
             target_idx = date_rows.index[0]
             target_close = combined.loc[target_idx, "close"]
