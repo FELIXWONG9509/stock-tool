@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, date
 import io
 import json
 import re
+import pandas_ta as ta
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
@@ -171,6 +172,8 @@ params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_kdj'] = st.session_state.use_kdj
     params['kdj_n'] = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n') if params['use_kdj'] else 9
+    params['kdj_m1'] = 3   # KDJ 平滑参数固定
+    params['kdj_m2'] = 3
 
     params['use_skdj'] = st.session_state.use_skdj
     params['skdj_n'] = st.slider("SKDJ N", 5, 30, 9, key='skdj_n') if params['use_skdj'] else 9
@@ -243,7 +246,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎 ==========
+# ========== 指标计算引擎（使用 pandas_ta） ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -251,169 +254,93 @@ def compute_all_features(df, p):
     volume = df["volume"]
     features = pd.DataFrame(index=df.index)
 
+    # KDJ
     if p['use_kdj']:
-        n = p['kdj_n']
-        low_min = low.rolling(n).min()
-        high_max = high.rolling(n).max()
-        rsv = (close - low_min) / (high_max - low_min + 1e-10) * 100
-        k_val = rsv.copy()
-        d_val = rsv.copy()
-        for i in range(1, len(k_val)):
-            k_val.iloc[i] = 2/3 * k_val.iloc[i-1] + 1/3 * rsv.iloc[i]
-            d_val.iloc[i] = 2/3 * d_val.iloc[i-1] + 1/3 * k_val.iloc[i]
-        features["kdj_k"] = k_val / 100.0
-        features["kdj_d"] = d_val / 100.0
-        features["kdj_j"] = (3 * k_val - 2 * d_val) / 100.0
+        kdj = ta.kdj(high=high, low=low, close=close, length=p['kdj_n'], signal=3)
+        features["kdj_k"] = kdj[f"KDJ_K_{p['kdj_n']}_3"] / 100.0
+        features["kdj_d"] = kdj[f"KDJ_D_{p['kdj_n']}_3"] / 100.0
+        features["kdj_j"] = kdj[f"KDJ_J_{p['kdj_n']}_3"] / 100.0
 
+    # SKDJ (慢速KDJ，用 pandas_ta 的慢速版本)
     if p['use_skdj']:
-        n, m = p['skdj_n'], p['skdj_m']
-        low_n = low.rolling(n).min()
-        high_n = high.rolling(n).max()
-        rsv = (close - low_n) / (high_n - low_n + 1e-10) * 100
-        k = rsv.ewm(alpha=1/m, adjust=False).mean()
-        d = k.ewm(alpha=1/m, adjust=False).mean()
-        skdj_k = d
-        skdj_d = d.ewm(alpha=1/m, adjust=False).mean()
-        features["skdj_k"] = skdj_k / 100.0
-        features["skdj_d"] = skdj_d / 100.0
-        features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
+        skdj = ta.kdj(high=high, low=low, close=close, length=p['skdj_n'], signal=3, offset=1)  # 模拟慢速
+        # pandas_ta 没有直接提供慢速KDJ，我们用两次平滑：先生成普通KDJ，再平滑一次
+        kdj_raw = ta.kdj(high=high, low=low, close=close, length=p['skdj_n'], signal=3)
+        slow_k = kdj_raw[f"KDJ_K_{p['skdj_n']}_3"].ewm(span=p['skdj_m']).mean()
+        slow_d = slow_k.ewm(span=p['skdj_m']).mean()
+        features["skdj_k"] = slow_k / 100.0
+        features["skdj_d"] = slow_d / 100.0
+        features["skdj_kd_diff"] = (slow_k - slow_d) / 100.0
 
     if p['use_rsi']:
-        period = p['rsi_period']
-        delta = close.diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
+        rsi = ta.rsi(close, length=p['rsi_period'])
         features["rsi"] = rsi / 100.0
 
     if p['use_wr']:
-        period = p['wr_period']
-        high_n = high.rolling(period).max()
-        low_n = low.rolling(period).min()
-        wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
+        wr = ta.willr(high=high, low=low, close=close, length=p['wr_period'])
         features["wr"] = wr / -100.0
 
     if p['use_bias']:
-        period = p['bias_period']
-        ma = close.rolling(period).mean()
+        ma = ta.sma(close, length=p['bias_period'])
         features["bias"] = (close - ma) / ma
 
     if p['use_cci']:
-        period = p['cci_period']
-        tp = (high + low + close) / 3
-        ma_tp = tp.rolling(period).mean()
-        mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
-        cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
+        cci = ta.cci(high=high, low=low, close=close, length=p['cci_period'])
         features["cci"] = cci.clip(-200, 200) / 200.0
 
     if p['use_roc']:
-        period = p['roc_period']
-        roc = close.pct_change(period) * 100
+        roc = ta.roc(close, length=p['roc_period'])
         features["roc"] = roc / 100.0
 
     if p['use_ma']:
-        fast, slow = p['ma_fast'], p['ma_slow']
-        ma_fast_val = close.rolling(fast).mean()
-        ma_slow_val = close.rolling(slow).mean()
-        features["ma_fast_dist"] = (close - ma_fast_val) / close
-        features["ma_slow_dist"] = (close - ma_slow_val) / close
-        features["ma_cross"] = (ma_fast_val - ma_slow_val) / close
+        fast_ma = ta.sma(close, length=p['ma_fast'])
+        slow_ma = ta.sma(close, length=p['ma_slow'])
+        features["ma_fast_dist"] = (close - fast_ma) / close
+        features["ma_slow_dist"] = (close - slow_ma) / close
+        features["ma_cross"] = (fast_ma - slow_ma) / close
 
     if p['use_macd']:
-        fast, slow, sig = p['macd_fast'], p['macd_slow'], p['macd_signal']
-        ema_fast = close.ewm(span=fast).mean()
-        ema_slow = close.ewm(span=slow).mean()
-        macd_line = ema_fast - ema_slow
-        signal = macd_line.ewm(span=sig).mean()
-        macd_hist = macd_line - signal
-        features["macd_hist_norm"] = macd_hist / (close + 1e-10)
+        macd = ta.macd(close, fast=p['macd_fast'], slow=p['macd_slow'], signal=p['macd_signal'])
+        features["macd_hist_norm"] = macd[f"MACDh_{p['macd_fast']}_{p['macd_slow']}_{p['macd_signal']}"] / close
 
     if p['use_expma']:
-        short, long = p['expma_short'], p['expma_long']
-        ema_short = close.ewm(span=short).mean()
-        ema_long = close.ewm(span=long).mean()
+        ema_short = ta.ema(close, length=p['expma_short'])
+        ema_long = ta.ema(close, length=p['expma_long'])
         features["expma_short_dist"] = (close - ema_short) / close
         features["expma_long_dist"] = (close - ema_long) / close
         features["expma_diff"] = (ema_short - ema_long) / close
 
     if p['use_boll']:
-        period, std_mult = p['bb_period'], p['bb_std']
-        bb_mid = close.rolling(period).mean()
-        bb_std_val = close.rolling(period).std()
-        bb_upper = bb_mid + std_mult * bb_std_val
-        bb_lower = bb_mid - std_mult * bb_std_val
-        features["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
+        bb = ta.bbands(close, length=p['bb_period'], std=p['bb_std'])
+        lower = bb[f"BBL_{p['bb_period']}_{p['bb_std']}.0"]
+        upper = bb[f"BBU_{p['bb_period']}_{p['bb_std']}.0"]
+        features["bb_position"] = (close - lower) / (upper - lower + 1e-10)
 
     if p['use_sar']:
-        af, max_af = 0.02, 0.2
-        sar = pd.Series(np.nan, index=close.index)
-        ep = low.copy()
-        trend = pd.Series(1, index=close.index)
-        for i in range(1, len(close)):
-            if trend.iloc[i-1] == 1:
-                sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
-                if low.iloc[i] < sar.iloc[i]:
-                    trend.iloc[i] = -1
-                    sar.iloc[i] = max(high.iloc[i], high.iloc[i-1])
-                    ep.iloc[i] = low.iloc[i]
-                    af = 0.02
-                else:
-                    if high.iloc[i] > ep.iloc[i-1]:
-                        ep.iloc[i] = high.iloc[i]
-                        af = min(af + 0.02, max_af)
-                    else:
-                        ep.iloc[i] = ep.iloc[i-1]
-            else:
-                sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
-                if high.iloc[i] > sar.iloc[i]:
-                    trend.iloc[i] = 1
-                    sar.iloc[i] = min(low.iloc[i], low.iloc[i-1])
-                    ep.iloc[i] = high.iloc[i]
-                    af = 0.02
-                else:
-                    if low.iloc[i] < ep.iloc[i-1]:
-                        ep.iloc[i] = low.iloc[i]
-                        af = min(af + 0.02, max_af)
-                    else:
-                        ep.iloc[i] = ep.iloc[i-1]
-        sar.iloc[0] = close.iloc[0]
+        sar = ta.psar(high=high, low=low, close=close)
         features["sar_dist"] = (close - sar) / close
 
     if p['use_dmi']:
-        period = p['dmi_period']
-        up_move = high.diff()
-        down_move = -low.diff()
-        pdm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-        mdm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-        tr = pd.concat([high-low, (high-close.shift()).abs(), (low-close.shift()).abs()], axis=1).max(axis=1)
-        atr = tr.ewm(alpha=1/period, adjust=False).mean()
-        pdm_smooth = pd.Series(pdm).ewm(alpha=1/period, adjust=False).mean()
-        mdm_smooth = pd.Series(mdm).ewm(alpha=1/period, adjust=False).mean()
-        pdi = 100 * pdm_smooth / atr
-        mdi = 100 * mdm_smooth / atr
-        dx = (abs(pdi - mdi) / (pdi + mdi + 1e-10)) * 100
-        adx = dx.ewm(alpha=1/period, adjust=False).mean()
-        features["dmi_plus"] = pdi / 100.0
-        features["dmi_minus"] = mdi / 100.0
-        features["dmi_adx"] = adx / 100.0
-        features["dmi_diff"] = (pdi - mdi) / 100.0
+        adx = ta.adx(high=high, low=low, close=close, length=p['dmi_period'])
+        pdi = adx[f"DMP_{p['dmi_period']}"] / 100.0
+        mdi = adx[f"DMN_{p['dmi_period']}"] / 100.0
+        adx_val = adx[f"ADX_{p['dmi_period']}"] / 100.0
+        features["dmi_plus"] = pdi
+        features["dmi_minus"] = mdi
+        features["dmi_adx"] = adx_val
+        features["dmi_diff"] = pdi - mdi
 
     if p['use_obv']:
-        sign = np.sign(close.diff())
-        obv = (sign * volume).cumsum()
+        obv = ta.obv(close=close, volume=volume)
         features["obv_change"] = obv.pct_change(5)
 
     if p['use_vol']:
-        period = p['vol_period']
-        vol_ma = volume.rolling(period).mean()
+        vol_ma = ta.sma(volume, length=p['vol_period'])
         features["vol_ratio"] = volume / vol_ma
 
     if p['use_trend']:
-        ma5 = close.rolling(5).mean()
-        ma20 = close.rolling(20).mean()
+        ma5 = ta.sma(close, length=5)
+        ma20 = ta.sma(close, length=20)
         features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
     return features
