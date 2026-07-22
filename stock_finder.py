@@ -236,7 +236,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 纯Python指标计算（无任何第三方库依赖） ==========
+# ========== 纯Python指标计算（末尾统一填充NaN） ==========
 def compute_all_features(df, p):
     close = df["close"].values
     high = df["high"].values
@@ -268,7 +268,6 @@ def compute_all_features(df, p):
         for i in range(1, len(rsv)):
             k_raw[i] = 2/3 * k_raw[i-1] + 1/3 * rsv[i]
             d_raw[i] = 2/3 * d_raw[i-1] + 1/3 * k_raw[i]
-        # 慢速平滑
         skdj_k = pd.Series(d_raw).ewm(alpha=1/m, adjust=False).mean().values
         skdj_d = pd.Series(skdj_k).ewm(alpha=1/m, adjust=False).mean().values
         features["skdj_k"] = skdj_k / 100.0
@@ -407,6 +406,8 @@ def compute_all_features(df, p):
         ma20 = pd.Series(close).rolling(20).mean().values
         features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
+    # ==== 关键修复：填充所有可能的 NaN，保证没有全空列 ====
+    features = features.ffill().bfill().fillna(0)
     return features
 
 # ========== 分析按钮 ==========
