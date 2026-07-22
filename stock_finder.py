@@ -42,12 +42,15 @@ if uploaded_file is not None:
                 if not klines:
                     st.error("JSON文件中没有历史数据。")
                     st.stop()
-                # 将 klines 列表拼接为完整 CSV 文本，然后用 pandas 读取
+                # 将 klines 转换为 DataFrame，使用 pandas 自动解析
+                # 先拼接成完整 CSV 文本
                 csv_text = "\n".join(klines)
-                # 东方财富 API 返回的字段顺序（前6个是我们需要的）
-                columns_all = ["date","open","close","high","low","volume",
-                               "amount","amplitude","pct_change","change","turnover"]
-                df_upload = pd.read_csv(io.StringIO(csv_text), header=None, names=columns_all)
+                # 东方财富 klines 字段顺序（API 文档）：
+                # 日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+                col_names = ["date","open","close","high","low","volume",
+                             "amount","amplitude","pct_change","change","turnover"]
+                df_upload = pd.read_csv(io.StringIO(csv_text), header=None, names=col_names)
+                # 只保留需要的列
                 df_upload = df_upload[["date","open","close","high","low","volume"]].copy()
             else:
                 st.error("JSON格式不正确，缺少 data.klines 字段。")
@@ -81,8 +84,9 @@ if uploaded_file is not None:
         for col in ["open","close","high","low","volume"]:
             df_upload[col] = df_upload[col].astype(str).str.replace(",","").str.strip()
             df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
-        # 强制转换类型
-        df_upload[["open","close","high","low","volume"]] = df_upload[["open","close","high","low","volume"]].astype(float)
+        # 强制转为正数（股价不可能为负）
+        df_upload[["open","close","high","low"]] = df_upload[["open","close","high","low"]].abs()
+        df_upload["volume"] = df_upload["volume"].abs()
         df_upload = df_upload.dropna(subset=["date","open","close","high","low","volume"]).sort_values("date").reset_index(drop=True)
 
         if len(df_upload) < 60:
@@ -91,7 +95,6 @@ if uploaded_file is not None:
 
         st.session_state["data"] = df_upload
         st.success(f"✅ 上传成功，共 {len(df_upload)} 条有效数据。")
-        # 快速预览，确保 close 为正数
         st.write("📋 前3行收盘价：", df_upload["close"].head(3).tolist())
     except Exception as e:
         st.error(f"文件解析失败：{e}")
@@ -246,7 +249,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎（完整版） ==========
+# ========== 指标计算引擎 ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
