@@ -7,25 +7,39 @@ import plotly.express as px
 from datetime import datetime, timedelta, date
 import io
 import json
+import re
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
 
-code = st.text_input("股票代码（如 600887）", "600887")
-analysis_date = st.date_input("📅 分析日期（默认今天，可选择历史日期）", date.today())
-days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
+# ---------- 自动提取文件名中的股票代码 ----------
+def extract_code_from_filename(filename):
+    # 匹配 sh600887 或 sz000001 等
+    match = re.search(r'(sh|sz)\d{6}', filename, re.IGNORECASE)
+    if match:
+        return match.group(0)
+    # 如果只有 6 位数字，自动判断上交所/深交所
+    match = re.search(r'(\d{6})', filename)
+    if match:
+        code = match.group(1)
+        if code.startswith('6'):
+            return 'sh' + code
+        else:
+            return 'sz' + code
+    return None
 
-# ---------- 上传本地文件（仅支持 JSON/CSV）----------
-st.subheader("📥 上传历史数据")
-st.markdown("请从东方财富下载 JSON 或 CSV 文件，然后上传。\n"
-            "JSON下载链接（替换股票代码）：\n"
-            "`http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600887&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000&ut=fa5fd1943c7b386f172d6893dbfba10b&cb=`")
-
-uploaded_file = st.file_uploader("选择文件（.json 或 .csv）", type=["json", "csv"])
+# 文件上传
+uploaded_file = st.file_uploader("📤 上传东方财富下载的 JSON 或 CSV 文件", type=["json", "csv"])
 
 if uploaded_file is not None:
     try:
         file_name = uploaded_file.name.lower()
+        # 尝试自动填写股票代码
+        auto_code = extract_code_from_filename(uploaded_file.name)
+        if auto_code and 'auto_code_set' not in st.session_state:
+            st.session_state['auto_code'] = auto_code
+            st.session_state['auto_code_set'] = True
+
         if file_name.endswith(".json"):
             content = uploaded_file.getvalue().decode("utf-8-sig")
             data_json = json.loads(content)
@@ -35,12 +49,12 @@ if uploaded_file is not None:
                     st.error("JSON文件中没有历史数据。")
                     st.stop()
                 rows = [line.split(",") for line in klines]
-                rows = [r[:6] for r in rows]
+                rows = [r[:6] for r in rows]  # 日期,开盘,收盘,最高,最低,成交量
                 df_upload = pd.DataFrame(rows, columns=["date","open","close","high","low","volume"])
             else:
                 st.error("JSON格式不正确，缺少 data.klines 字段。")
                 st.stop()
-        else:  # CSV
+        else:
             content = uploaded_file.getvalue().decode("utf-8-sig")
             lines = content.strip().split("\n")
             if not lines:
@@ -61,26 +75,33 @@ if uploaded_file is not None:
                 df_upload = df_upload.rename(columns=col_map)
                 required = ["date","open","close","high","low","volume"]
                 if not all(c in df_upload.columns for c in required):
-                    st.error("CSV缺少必要列：日期、开盘、收盘、最高、最低、成交量。请检查文件。")
+                    st.error("CSV缺少必要列。")
                     st.stop()
 
-        # 统一处理数据
-        df_upload["date"] = pd.to_datetime(df_upload["date"])
+        # 清洗数据
+        df_upload["date"] = pd.to_datetime(df_upload["date"], errors="coerce")
         for col in ["open","close","high","low","volume"]:
+            # 移除千分位逗号，转为数值
+            df_upload[col] = df_upload[col].astype(str).str.replace(",","").str.strip()
             df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
-        df_upload = df_upload.dropna().sort_values("date").reset_index(drop=True)
+        df_upload = df_upload.dropna(subset=["date","open","close","high","low","volume"]).sort_values("date").reset_index(drop=True)
 
         if len(df_upload) < 60:
-            st.error("数据不足，至少需要60个交易日。")
+            st.error("有效数据不足（少于60个交易日），请检查文件。")
             st.stop()
 
-        # 存入 session_state，覆盖旧数据
         st.session_state["data"] = df_upload
-        st.success(f"✅ 上传成功，共 {len(df_upload)} 条数据，可用于分析。")
+        st.success(f"✅ 上传成功，共 {len(df_upload)} 条有效数据。")
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# 读取数据
+# 股票代码输入（如果有自动识别，预填）
+default_code = st.session_state.get("auto_code", "600887")
+code = st.text_input("股票代码", value=default_code)
+
+analysis_date = st.date_input("📅 分析日期（默认今天）", date.today())
+days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
+
 if "data" not in st.session_state:
     st.info("👆 请先上传历史数据文件（JSON 或 CSV）。")
     st.stop()
@@ -115,14 +136,12 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
-# 重置
 if st.sidebar.button("🔄 重置所有指标"):
     for k in all_keys:
         st.session_state[k] = False
     st.session_state.combo = "自定义（手动选择）"
     st.rerun()
 
-# 固定搭配选择
 with st.sidebar.expander("📦 固定搭配", expanded=True):
     current_display = None
     for disp, combo in display_to_combo.items():
@@ -149,7 +168,7 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 参数调整（确保所有参数都有默认值） ==========
+# ========== 参数调整（保证所有参数有默认值） ==========
 params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_kdj'] = st.session_state.use_kdj
@@ -226,7 +245,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算（基于 params 字典） ==========
+# ========== 指标计算引擎 ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -290,8 +309,7 @@ def compute_all_features(df, p):
         ma_tp = tp.rolling(period).mean()
         mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
         cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
-        cci_clipped = cci.clip(-200, 200)
-        features["cci"] = cci_clipped / 200.0
+        features["cci"] = cci.clip(-200, 200) / 200.0
 
     if p['use_roc']:
         period = p['roc_period']
@@ -332,8 +350,7 @@ def compute_all_features(df, p):
         features["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
 
     if p['use_sar']:
-        af = 0.02
-        max_af = 0.2
+        af, max_af = 0.02, 0.2
         sar = pd.Series(np.nan, index=close.index)
         ep = low.copy()
         trend = pd.Series(1, index=close.index)
@@ -342,7 +359,7 @@ def compute_all_features(df, p):
                 sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
                 if low.iloc[i] < sar.iloc[i]:
                     trend.iloc[i] = -1
-                    sar.iloc[i] = max(high.iloc[i], high.iloc[i-1]) if i>0 else high.iloc[i]
+                    sar.iloc[i] = max(high.iloc[i], high.iloc[i-1])
                     ep.iloc[i] = low.iloc[i]
                     af = 0.02
                 else:
@@ -355,7 +372,7 @@ def compute_all_features(df, p):
                 sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
                 if high.iloc[i] > sar.iloc[i]:
                     trend.iloc[i] = 1
-                    sar.iloc[i] = min(low.iloc[i], low.iloc[i-1]) if i>0 else low.iloc[i]
+                    sar.iloc[i] = min(low.iloc[i], low.iloc[i-1])
                     ep.iloc[i] = high.iloc[i]
                     af = 0.02
                 else:
@@ -373,8 +390,8 @@ def compute_all_features(df, p):
         down_move = -low.diff()
         pdm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         mdm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-        atr = pd.Series(tr).ewm(alpha=1/period, adjust=False).mean()
+        tr = pd.concat([high-low, (high-close.shift()).abs(), (low-close.shift()).abs()], axis=1).max(axis=1)
+        atr = tr.ewm(alpha=1/period, adjust=False).mean()
         pdm_smooth = pd.Series(pdm).ewm(alpha=1/period, adjust=False).mean()
         mdm_smooth = pd.Series(mdm).ewm(alpha=1/period, adjust=False).mean()
         pdi = 100 * pdm_smooth / atr
@@ -403,21 +420,30 @@ def compute_all_features(df, p):
 
     return features
 
-# ========== 开始分析 ==========
+# ========== 分析按钮 ==========
 if st.button("🔍 开始分析"):
     if not code:
         st.warning("请输入股票代码")
     else:
         features = compute_all_features(data, params)
         combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
+
+        # 调试信息
+        with st.expander("🔧 调试信息（遇到0天时查看）"):
+            st.write(f"原始数据行数：{len(data)}")
+            st.write(f"特征列：{list(features.columns)}")
+            st.write(f"合并后有效行数：{len(combined)}")
+            if len(combined) == 0:
+                st.write("可能原因：数值转换失败导致全部NaN，请检查上传的文件是否包含正确的数字格式。")
+
         if len(combined) < 100:
-            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。\n请选择更靠后的分析日期，或检查上传的数据是否包含足够的历史。")
+            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。\n请选择更靠后的分析日期，或检查文件是否正确。")
             st.stop()
 
         target_date = pd.to_datetime(analysis_date)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
-            st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值。")
+            st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
         else:
             target_idx = date_rows.index[0]
             target_close = combined.loc[target_idx, "close"]
@@ -485,4 +511,4 @@ if st.button("🔍 开始分析"):
                     match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
                     st.dataframe(pd.DataFrame({"历史日期":match_dates.values[:len(sim_scores)], "相似度":sim_scores}).head(20))
 
-                st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
+                st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考。")
