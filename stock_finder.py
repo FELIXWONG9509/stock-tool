@@ -42,15 +42,11 @@ if uploaded_file is not None:
                 if not klines:
                     st.error("JSON文件中没有历史数据。")
                     st.stop()
-                # 将 klines 转换为 DataFrame，使用 pandas 自动解析
-                # 先拼接成完整 CSV 文本
+                # 拼接为完整CSV文本，使用pandas解析（列名严格按API文档）
                 csv_text = "\n".join(klines)
-                # 东方财富 klines 字段顺序（API 文档）：
-                # 日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
                 col_names = ["date","open","close","high","low","volume",
                              "amount","amplitude","pct_change","change","turnover"]
                 df_upload = pd.read_csv(io.StringIO(csv_text), header=None, names=col_names)
-                # 只保留需要的列
                 df_upload = df_upload[["date","open","close","high","low","volume"]].copy()
             else:
                 st.error("JSON格式不正确，缺少 data.klines 字段。")
@@ -249,7 +245,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎 ==========
+# ========== 指标计算引擎（关键修复：KDJ 使用 ffill 填充 NaN） ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -270,6 +266,10 @@ def compute_all_features(df, p):
         features["kdj_k"] = k_val / 100.0
         features["kdj_d"] = d_val / 100.0
         features["kdj_j"] = (3 * k_val - 2 * d_val) / 100.0
+        # 前向填充NaN，避免dropna删除整行
+        features["kdj_k"] = features["kdj_k"].ffill().bfill()
+        features["kdj_d"] = features["kdj_d"].ffill().bfill()
+        features["kdj_j"] = features["kdj_j"].ffill().bfill()
 
     if p['use_skdj']:
         n, m = p['skdj_n'], p['skdj_m']
@@ -283,7 +283,11 @@ def compute_all_features(df, p):
         features["skdj_k"] = skdj_k / 100.0
         features["skdj_d"] = skdj_d / 100.0
         features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
+        features["skdj_k"] = features["skdj_k"].ffill().bfill()
+        features["skdj_d"] = features["skdj_d"].ffill().bfill()
+        features["skdj_kd_diff"] = features["skdj_kd_diff"].ffill().bfill()
 
+    # 其他指标保持原样（它们通常不会产生大段NaN，如有需要也可加ffill，但非必需）
     if p['use_rsi']:
         period = p['rsi_period']
         delta = close.diff()
