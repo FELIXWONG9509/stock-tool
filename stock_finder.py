@@ -42,9 +42,13 @@ if uploaded_file is not None:
                 if not klines:
                     st.error("JSON文件中没有历史数据。")
                     st.stop()
-                rows = [line.split(",") for line in klines]
-                rows = [r[:6] for r in rows]
-                df_upload = pd.DataFrame(rows, columns=["date","open","close","high","low","volume"])
+                # 将 klines 列表拼接为完整 CSV 文本，然后用 pandas 读取
+                csv_text = "\n".join(klines)
+                # 东方财富 API 返回的字段顺序（前6个是我们需要的）
+                columns_all = ["date","open","close","high","low","volume",
+                               "amount","amplitude","pct_change","change","turnover"]
+                df_upload = pd.read_csv(io.StringIO(csv_text), header=None, names=columns_all)
+                df_upload = df_upload[["date","open","close","high","low","volume"]].copy()
             else:
                 st.error("JSON格式不正确，缺少 data.klines 字段。")
                 st.stop()
@@ -72,13 +76,12 @@ if uploaded_file is not None:
                     st.error("CSV缺少必要列。")
                     st.stop()
 
-        # 清洗数据（强化版）
+        # 数据清洗
         df_upload["date"] = pd.to_datetime(df_upload["date"], errors="coerce")
-        # 强制转字符串再去除千分位逗号，然后转float
         for col in ["open","close","high","low","volume"]:
-            df_upload[col] = df_upload[col].astype(str).str.replace(",", "").str.strip()
+            df_upload[col] = df_upload[col].astype(str).str.replace(",","").str.strip()
             df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
-        # 再次确保是 float 类型，避免 object 残留
+        # 强制转换类型
         df_upload[["open","close","high","low","volume"]] = df_upload[["open","close","high","low","volume"]].astype(float)
         df_upload = df_upload.dropna(subset=["date","open","close","high","low","volume"]).sort_values("date").reset_index(drop=True)
 
@@ -88,8 +91,8 @@ if uploaded_file is not None:
 
         st.session_state["data"] = df_upload
         st.success(f"✅ 上传成功，共 {len(df_upload)} 条有效数据。")
-        st.write("📋 数据预览（前3行收盘价）：", df_upload["close"].head(3).tolist())
-        st.write("📋 close列类型：", df_upload["close"].dtype)
+        # 快速预览，确保 close 为正数
+        st.write("📋 前3行收盘价：", df_upload["close"].head(3).tolist())
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
@@ -243,7 +246,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎 ==========
+# ========== 指标计算引擎（完整版） ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -265,9 +268,156 @@ def compute_all_features(df, p):
         features["kdj_d"] = d_val / 100.0
         features["kdj_j"] = (3 * k_val - 2 * d_val) / 100.0
 
-    # 后续指标计算保持不变（省略，与上一版相同）...
-    # 这里由于篇幅，不重复所有指标，你替换时应保留完整的其他指标代码。
-    # 请用之前提供的完整指标代码补充进来，确保所有指标逻辑完整。
+    if p['use_skdj']:
+        n, m = p['skdj_n'], p['skdj_m']
+        low_n = low.rolling(n).min()
+        high_n = high.rolling(n).max()
+        rsv = (close - low_n) / (high_n - low_n + 1e-10) * 100
+        k = rsv.ewm(alpha=1/m, adjust=False).mean()
+        d = k.ewm(alpha=1/m, adjust=False).mean()
+        skdj_k = d
+        skdj_d = d.ewm(alpha=1/m, adjust=False).mean()
+        features["skdj_k"] = skdj_k / 100.0
+        features["skdj_d"] = skdj_d / 100.0
+        features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
+
+    if p['use_rsi']:
+        period = p['rsi_period']
+        delta = close.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        features["rsi"] = rsi / 100.0
+
+    if p['use_wr']:
+        period = p['wr_period']
+        high_n = high.rolling(period).max()
+        low_n = low.rolling(period).min()
+        wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
+        features["wr"] = wr / -100.0
+
+    if p['use_bias']:
+        period = p['bias_period']
+        ma = close.rolling(period).mean()
+        features["bias"] = (close - ma) / ma
+
+    if p['use_cci']:
+        period = p['cci_period']
+        tp = (high + low + close) / 3
+        ma_tp = tp.rolling(period).mean()
+        mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
+        cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
+        features["cci"] = cci.clip(-200, 200) / 200.0
+
+    if p['use_roc']:
+        period = p['roc_period']
+        roc = close.pct_change(period) * 100
+        features["roc"] = roc / 100.0
+
+    if p['use_ma']:
+        fast, slow = p['ma_fast'], p['ma_slow']
+        ma_fast_val = close.rolling(fast).mean()
+        ma_slow_val = close.rolling(slow).mean()
+        features["ma_fast_dist"] = (close - ma_fast_val) / close
+        features["ma_slow_dist"] = (close - ma_slow_val) / close
+        features["ma_cross"] = (ma_fast_val - ma_slow_val) / close
+
+    if p['use_macd']:
+        fast, slow, sig = p['macd_fast'], p['macd_slow'], p['macd_signal']
+        ema_fast = close.ewm(span=fast).mean()
+        ema_slow = close.ewm(span=slow).mean()
+        macd_line = ema_fast - ema_slow
+        signal = macd_line.ewm(span=sig).mean()
+        macd_hist = macd_line - signal
+        features["macd_hist_norm"] = macd_hist / (close + 1e-10)
+
+    if p['use_expma']:
+        short, long = p['expma_short'], p['expma_long']
+        ema_short = close.ewm(span=short).mean()
+        ema_long = close.ewm(span=long).mean()
+        features["expma_short_dist"] = (close - ema_short) / close
+        features["expma_long_dist"] = (close - ema_long) / close
+        features["expma_diff"] = (ema_short - ema_long) / close
+
+    if p['use_boll']:
+        period, std_mult = p['bb_period'], p['bb_std']
+        bb_mid = close.rolling(period).mean()
+        bb_std_val = close.rolling(period).std()
+        bb_upper = bb_mid + std_mult * bb_std_val
+        bb_lower = bb_mid - std_mult * bb_std_val
+        features["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
+
+    if p['use_sar']:
+        af, max_af = 0.02, 0.2
+        sar = pd.Series(np.nan, index=close.index)
+        ep = low.copy()
+        trend = pd.Series(1, index=close.index)
+        for i in range(1, len(close)):
+            if trend.iloc[i-1] == 1:
+                sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
+                if low.iloc[i] < sar.iloc[i]:
+                    trend.iloc[i] = -1
+                    sar.iloc[i] = max(high.iloc[i], high.iloc[i-1])
+                    ep.iloc[i] = low.iloc[i]
+                    af = 0.02
+                else:
+                    if high.iloc[i] > ep.iloc[i-1]:
+                        ep.iloc[i] = high.iloc[i]
+                        af = min(af + 0.02, max_af)
+                    else:
+                        ep.iloc[i] = ep.iloc[i-1]
+            else:
+                sar.iloc[i] = sar.iloc[i-1] + af * (ep.iloc[i-1] - sar.iloc[i-1])
+                if high.iloc[i] > sar.iloc[i]:
+                    trend.iloc[i] = 1
+                    sar.iloc[i] = min(low.iloc[i], low.iloc[i-1])
+                    ep.iloc[i] = high.iloc[i]
+                    af = 0.02
+                else:
+                    if low.iloc[i] < ep.iloc[i-1]:
+                        ep.iloc[i] = low.iloc[i]
+                        af = min(af + 0.02, max_af)
+                    else:
+                        ep.iloc[i] = ep.iloc[i-1]
+        sar.iloc[0] = close.iloc[0]
+        features["sar_dist"] = (close - sar) / close
+
+    if p['use_dmi']:
+        period = p['dmi_period']
+        up_move = high.diff()
+        down_move = -low.diff()
+        pdm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        mdm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        tr = pd.concat([high-low, (high-close.shift()).abs(), (low-close.shift()).abs()], axis=1).max(axis=1)
+        atr = tr.ewm(alpha=1/period, adjust=False).mean()
+        pdm_smooth = pd.Series(pdm).ewm(alpha=1/period, adjust=False).mean()
+        mdm_smooth = pd.Series(mdm).ewm(alpha=1/period, adjust=False).mean()
+        pdi = 100 * pdm_smooth / atr
+        mdi = 100 * mdm_smooth / atr
+        dx = (abs(pdi - mdi) / (pdi + mdi + 1e-10)) * 100
+        adx = dx.ewm(alpha=1/period, adjust=False).mean()
+        features["dmi_plus"] = pdi / 100.0
+        features["dmi_minus"] = mdi / 100.0
+        features["dmi_adx"] = adx / 100.0
+        features["dmi_diff"] = (pdi - mdi) / 100.0
+
+    if p['use_obv']:
+        sign = np.sign(close.diff())
+        obv = (sign * volume).cumsum()
+        features["obv_change"] = obv.pct_change(5)
+
+    if p['use_vol']:
+        period = p['vol_period']
+        vol_ma = volume.rolling(period).mean()
+        features["vol_ratio"] = volume / vol_ma
+
+    if p['use_trend']:
+        ma5 = close.rolling(5).mean()
+        ma20 = close.rolling(20).mean()
+        features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
     return features
 
@@ -277,21 +427,80 @@ if st.button("🔍 开始分析"):
         st.warning("请输入股票代码")
     else:
         features = compute_all_features(data, params)
-        combined = pd.concat([data[["date","close"]], features], axis=1)
-        # 调试信息
-        with st.expander("🔧 调试信息（如遇0天请展开）"):
-            st.write(f"原始数据行数：{len(data)}")
-            st.write(f"特征列：{list(features.columns)}")
-            st.write(f"合并后总行数：{len(combined)}")
-            st.write("前5行 close 值：", combined["close"].head(5).tolist())
-            st.write("前5行 kdj_k 值：", combined["kdj_k"].head(10).tolist() if "kdj_k" in combined else "无")
-            st.write("close列类型：", combined["close"].dtype)
-            st.write("kdj_k列类型：", combined["kdj_k"].dtype if "kdj_k" in combined else "无")
-        combined = combined.dropna()
-        st.write("去NaN后行数：", len(combined))
+        combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
         if len(combined) < 100:
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。")
             st.stop()
 
-        # 后续分析逻辑（与之前相同）
-        # 这里省略，请保留上一版完整分析代码。
+        target_date = pd.to_datetime(analysis_date)
+        date_rows = combined[combined["date"] == target_date]
+        if date_rows.empty:
+            st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值。")
+        else:
+            target_idx = date_rows.index[0]
+            target_close = combined.loc[target_idx, "close"]
+            st.success(f"📌 {target_date.date()} 收盘价：{target_close:.2f} 元")
+
+            feature_cols = [col for col in combined.columns if col not in ["date","close"]]
+            current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
+
+            exclude_start = max(0, target_idx - 20)
+            exclude_end = min(len(combined), target_idx + 21)
+            hist_mask = np.ones(len(combined), dtype=bool)
+            hist_mask[exclude_start:exclude_end] = False
+            hist_feat = combined.loc[hist_mask, feature_cols].values
+
+            if len(hist_feat) < 30:
+                st.warning("相似样本较少，结果可能有偏差")
+
+            scaler = StandardScaler()
+            scaler.fit(hist_feat)
+            sim = cosine_similarity(scaler.transform(current_feat), scaler.transform(hist_feat))[0]
+            top_k = min(30, len(sim))
+            top_idx = np.argsort(sim)[-top_k:][::-1]
+            hist_combined_idx = combined.loc[hist_mask].index.values
+            matched_indices = hist_combined_idx[top_idx]
+            sim_scores = sim[top_idx]
+
+            with st.expander("📊 当前分析日期的技术指标数值"):
+                cur_df = pd.DataFrame({"指标":feature_cols, "数值":combined.loc[target_idx, feature_cols].values})
+                st.dataframe(cur_df.set_index("指标"), use_container_width=True)
+
+            with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
+                top5 = matched_indices[:5]
+                sim_df = combined.loc[top5, ["date"]+feature_cols].copy()
+                sim_df["日期"] = sim_df["date"].dt.date
+                st.dataframe(sim_df.drop(columns="date").set_index("日期"), use_container_width=True)
+
+            close_series = combined["close"].reset_index(drop=True)
+            rets = []
+            for idx in matched_indices:
+                if idx + days_hold < len(close_series):
+                    ret = (close_series.iloc[idx + days_hold] / close_series.iloc[idx]) - 1
+                    rets.append(ret)
+
+            if len(rets) < 5:
+                st.error("有效相似样本太少，无法统计")
+            else:
+                ret_arr = np.array(rets)
+                win_rate = (ret_arr > 0).mean()
+                avg_ret = ret_arr.mean()
+                pos = ret_arr[ret_arr > 0]; neg = ret_arr[ret_arr < 0]
+                pl_ratio = pos.mean() / abs(neg.mean()) if len(pos) and len(neg) else np.inf
+                col1, col2, col3 = st.columns(3)
+                col1.metric("上涨概率", f"{win_rate:.1%}")
+                col2.metric("平均收益", f"{avg_ret:.2%}")
+                col3.metric("盈亏比", f"{pl_ratio:.2f}")
+                if win_rate > 0.55 and avg_ret > 0:
+                    st.success("✅ 概率买点信号")
+                else:
+                    st.info("ℹ️ 未达到高概率买点标准")
+                fig = px.histogram(ret_arr, nbins=20, title=f"相似历史持有{days_hold}天收益分布")
+                fig.add_vline(x=0, line_dash="dash", line_color="red")
+                st.plotly_chart(fig, use_container_width=True)
+
+                with st.expander("相似历史日期及相似度"):
+                    match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
+                    st.dataframe(pd.DataFrame({"历史日期":match_dates.values[:len(sim_scores)], "相似度":sim_scores}).head(20))
+
+                st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
