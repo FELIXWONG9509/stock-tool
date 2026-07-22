@@ -16,15 +16,14 @@ code = st.text_input("股票代码（如 600887）", "600887")
 analysis_date = st.date_input("📅 分析日期（默认今天，可选择历史日期）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ---------- 在线获取 & 上传区域 ----------
+# ---------- 数据来源区域 ----------
 st.subheader("📥 数据来源")
 col_dl, col_up = st.columns(2)
 with col_dl:
-    st.markdown("**方式一：在线获取（可能因网络失败）**")
+    st.markdown("**方式一：在线获取（可能因网络限制失败）**")
     if st.button("🌐 在线获取历史数据"):
         with st.spinner("正在从东方财富获取数据..."):
             try:
-                # 尝试获取上市时间，确定数据范围
                 try:
                     info = ak.stock_individual_info_em(symbol=code)
                     list_date_str = info.loc[info["item"] == "上市时间", "value"].values[0]
@@ -50,33 +49,51 @@ with col_dl:
                     st.success(f"✅ 在线获取成功，共 {len(df)} 条数据，可直接分析。")
             except Exception as e:
                 st.error(f"在线获取失败（{e}）。请使用下方“方式二”上传本地数据。")
-                st.info("📥 可点击以下链接进入东方财富下载CSV文件（在新标签页打开）：")
-                st.markdown(f"[➡️ 打开 {code} 的历史数据页面](https://quote.eastmoney.com/concept/sh{code}.html)（深圳股票请手动改sh为sz）", unsafe_allow_html=True)
+                st.info("📥 可点击以下链接下载CSV文件：")
+                st.markdown(f"[➡️ 下载 {code} 的历史数据](http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000)（深圳股票请将 `1.` 改为 `0.`）", unsafe_allow_html=True)
 
 with col_up:
     st.markdown("**方式二：上传本地CSV文件**")
-    uploaded_file = st.file_uploader("从东方财富下载的CSV文件（必需包含日期、开盘、收盘、最高、最低、成交量）", type="csv")
+    st.markdown("*支持从上方链接直接保存的文件，无需手动修改*")
+    uploaded_file = st.file_uploader("选择CSV文件（必需包含日期、开盘、收盘、最高、最低、成交量）", type="csv")
     if uploaded_file is not None:
         try:
-            df_upload = pd.read_csv(uploaded_file)
-            # 统一列名（兼容中英文）
-            rename_map = {
-                "日期": "date", "开盘": "open", "收盘": "close",
-                "最高": "high", "最低": "low", "成交量": "volume",
-                "date": "date", "open": "open", "close": "close",
-                "high": "high", "low": "low", "volume": "volume"
-            }
-            df_upload.columns = [col.strip().lower() for col in df_upload.columns]
-            col_map = {col: rename_map[col] for col in df_upload.columns if col in rename_map}
-            df_upload = df_upload.rename(columns=col_map)
-            required = ["date", "open", "close", "high", "low", "volume"]
-            if all(c in df_upload.columns for c in required):
-                df_upload["date"] = pd.to_datetime(df_upload["date"])
-                df_upload = df_upload[required].sort_values("date").reset_index(drop=True)
-                st.session_state.uploaded_data = df_upload
-                st.success("✅ 上传成功，将使用本地数据进行分析。")
+            # 先读取文件内容，判断是否有表头
+            content = uploaded_file.getvalue().decode("utf-8")
+            lines = content.strip().split("\n")
+            first_line = lines[0].strip()
+            # 如果第一行是数字开头（如 2024-01-02），则认为是无表头原始数据
+            if first_line and first_line[0].isdigit():
+                # 东方财富API返回的字段顺序：
+                # 日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+                columns = ["date","open","close","high","low","volume"]
+                # 读取时跳过表头行，手动设置列名
+                df_upload = pd.read_csv(io.StringIO(content), header=None)
+                # 只取前6列（日期、开盘、收盘、最高、最低、成交量）
+                df_upload = df_upload.iloc[:, [0,1,2,3,4,5]]
+                df_upload.columns = columns
             else:
-                st.error("CSV缺少必要列：日期、开盘、收盘、最高、最低、成交量。请检查文件。")
+                # 有表头的情况，兼容中英文
+                df_upload = pd.read_csv(io.StringIO(content))
+                rename_map = {
+                    "日期": "date", "开盘": "open", "收盘": "close",
+                    "最高": "high", "最低": "low", "成交量": "volume",
+                    "date": "date", "open": "open", "close": "close",
+                    "high": "high", "low": "low", "volume": "volume"
+                }
+                df_upload.columns = [col.strip().lower() for col in df_upload.columns]
+                col_map = {col: rename_map[col] for col in df_upload.columns if col in rename_map}
+                df_upload = df_upload.rename(columns=col_map)
+                required = ["date", "open", "close", "high", "low", "volume"]
+                if not all(c in df_upload.columns for c in required):
+                    st.error("CSV缺少必要列：日期、开盘、收盘、最高、最低、成交量。请检查文件。")
+                    st.stop()
+
+            # 统一处理日期格式
+            df_upload["date"] = pd.to_datetime(df_upload["date"])
+            df_upload = df_upload[["date","open","close","high","low","volume"]].sort_values("date").reset_index(drop=True)
+            st.session_state.uploaded_data = df_upload
+            st.success("✅ 上传成功，将使用本地数据进行分析。")
         except Exception as e:
             st.error(f"读取文件出错：{e}")
 
