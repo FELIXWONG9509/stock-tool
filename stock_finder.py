@@ -1,12 +1,10 @@
 import streamlit as st
-import akshare as ak
 import pandas as pd
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 from datetime import datetime, timedelta, date
-import time
 import io
 import json
 
@@ -17,100 +15,76 @@ code = st.text_input("股票代码（如 600887）", "600887")
 analysis_date = st.date_input("📅 分析日期（默认今天，可选择历史日期）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ---------- 数据来源 ----------
-st.subheader("📥 数据来源")
-col_dl, col_up = st.columns(2)
-with col_dl:
-    st.markdown("**方式一：在线获取（可能失败）**")
-    if st.button("🌐 在线获取历史数据"):
-        with st.spinner("正在从东方财富获取数据..."):
-            try:
-                try:
-                    info = ak.stock_individual_info_em(symbol=code)
-                    list_date_str = info.loc[info["item"] == "上市时间", "value"].values[0]
-                    list_date = pd.to_datetime(list_date_str)
-                    total_days = (datetime.now() - list_date).days
-                    request_days = min(total_days, 5 * 365)
-                    request_days = max(request_days, 60)
-                except:
-                    request_days = 5 * 365
-                end_date = datetime.now().strftime("%Y%m%d")
-                start_date = (datetime.now() - timedelta(days=request_days)).strftime("%Y%m%d")
-                df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
-                if df.empty:
-                    st.warning("未获取到数据，请检查代码或使用方式二上传。")
-                else:
-                    df = df.rename(columns={"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume"})
-                    df["date"] = pd.to_datetime(df["date"])
-                    df = df.sort_values("date").reset_index(drop=True)
-                    st.session_state.online_data = df
-                    st.success(f"✅ 在线获取成功，共 {len(df)} 条数据。")
-            except Exception as e:
-                st.error(f"在线获取失败（{e}）。请使用下方方式二上传本地文件。")
-                st.info("📥 推荐使用JSON格式下载：")
-                st.markdown(f"[➡️ 下载 {code} 的JSON数据](http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000&ut=fa5fd1943c7b386f172d6893dbfba10b&cb=) （右键→另存为→文件名.json）", unsafe_allow_html=True)
+# ---------- 上传本地文件（仅支持 JSON/CSV）----------
+st.subheader("📥 上传历史数据")
+st.markdown("请从东方财富下载 JSON 或 CSV 文件，然后上传。\n"
+            "JSON下载链接（替换股票代码）：\n"
+            "`http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600887&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000&ut=fa5fd1943c7b386f172d6893dbfba10b&cb=`")
 
-with col_up:
-    st.markdown("**方式二：上传本地文件（JSON或CSV）**")
-    uploaded_file = st.file_uploader("选择文件（.json 或 .csv）", type=["json", "csv"])
-    if uploaded_file is not None:
-        try:
-            file_name = uploaded_file.name.lower()
-            if file_name.endswith(".json"):
-                content = uploaded_file.getvalue().decode("utf-8-sig")
-                data_json = json.loads(content)
-                if "data" in data_json and "klines" in data_json["data"]:
-                    klines = data_json["data"]["klines"]
-                    if not klines:
-                        st.error("JSON文件中没有历史数据。")
-                        st.stop()
-                    rows = [line.split(",") for line in klines]
-                    rows = [r[:6] for r in rows]
-                    df_upload = pd.DataFrame(rows, columns=["date","open","close","high","low","volume"])
-                else:
-                    st.error("JSON格式不正确，缺少 data.klines 字段。")
+uploaded_file = st.file_uploader("选择文件（.json 或 .csv）", type=["json", "csv"])
+
+if uploaded_file is not None:
+    try:
+        file_name = uploaded_file.name.lower()
+        if file_name.endswith(".json"):
+            content = uploaded_file.getvalue().decode("utf-8-sig")
+            data_json = json.loads(content)
+            if "data" in data_json and "klines" in data_json["data"]:
+                klines = data_json["data"]["klines"]
+                if not klines:
+                    st.error("JSON文件中没有历史数据。")
                     st.stop()
+                rows = [line.split(",") for line in klines]
+                rows = [r[:6] for r in rows]
+                df_upload = pd.DataFrame(rows, columns=["date","open","close","high","low","volume"])
             else:
-                content = uploaded_file.getvalue().decode("utf-8-sig")
-                lines = content.strip().split("\n")
-                if not lines:
-                    st.error("文件为空。")
-                    st.stop()
-                first_line = lines[0].strip()
-                if first_line and first_line[0].isdigit():
-                    columns = ["date","open","close","high","low","volume"]
-                    df_upload = pd.read_csv(io.StringIO(content), header=None)
-                    df_upload = df_upload.iloc[:, :6]
-                    df_upload.columns = columns
-                else:
-                    df_upload = pd.read_csv(io.StringIO(content))
-                    rename_map = {"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume",
-                                  "date":"date","open":"open","close":"close","high":"high","low":"low","volume":"volume"}
-                    df_upload.columns = [col.strip().lower() for col in df_upload.columns]
-                    col_map = {col:rename_map[col] for col in df_upload.columns if col in rename_map}
-                    df_upload = df_upload.rename(columns=col_map)
-                    required = ["date","open","close","high","low","volume"]
-                    if not all(c in df_upload.columns for c in required):
-                        st.error("缺少必要列，请检查文件或改用JSON。")
-                        st.stop()
-            df_upload["date"] = pd.to_datetime(df_upload["date"])
-            for col in ["open","close","high","low","volume"]:
-                df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
-            df_upload = df_upload.dropna().sort_values("date").reset_index(drop=True)
-            if len(df_upload) < 60:
-                st.error("数据不足，至少需要60个交易日。")
+                st.error("JSON格式不正确，缺少 data.klines 字段。")
                 st.stop()
-            st.session_state.uploaded_data = df_upload
-            st.success(f"✅ 上传成功，共 {len(df_upload)} 条数据。")
-        except Exception as e:
-            st.error(f"文件解析失败：{e}")
+        else:  # CSV
+            content = uploaded_file.getvalue().decode("utf-8-sig")
+            lines = content.strip().split("\n")
+            if not lines:
+                st.error("文件为空。")
+                st.stop()
+            first_line = lines[0].strip()
+            if first_line and first_line[0].isdigit():
+                columns = ["date","open","close","high","low","volume"]
+                df_upload = pd.read_csv(io.StringIO(content), header=None)
+                df_upload = df_upload.iloc[:, :6]
+                df_upload.columns = columns
+            else:
+                df_upload = pd.read_csv(io.StringIO(content))
+                rename_map = {"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume",
+                              "date":"date","open":"open","close":"close","high":"high","low":"low","volume":"volume"}
+                df_upload.columns = [col.strip().lower() for col in df_upload.columns]
+                col_map = {col:rename_map[col] for col in df_upload.columns if col in rename_map}
+                df_upload = df_upload.rename(columns=col_map)
+                required = ["date","open","close","high","low","volume"]
+                if not all(c in df_upload.columns for c in required):
+                    st.error("CSV缺少必要列：日期、开盘、收盘、最高、最低、成交量。请检查文件。")
+                    st.stop()
 
-if "online_data" in st.session_state:
-    data = st.session_state.online_data
-elif "uploaded_data" in st.session_state:
-    data = st.session_state.uploaded_data
-else:
-    data = None
+        # 统一处理数据
+        df_upload["date"] = pd.to_datetime(df_upload["date"])
+        for col in ["open","close","high","low","volume"]:
+            df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
+        df_upload = df_upload.dropna().sort_values("date").reset_index(drop=True)
+
+        if len(df_upload) < 60:
+            st.error("数据不足，至少需要60个交易日。")
+            st.stop()
+
+        # 存入 session_state，覆盖旧数据
+        st.session_state["data"] = df_upload
+        st.success(f"✅ 上传成功，共 {len(df_upload)} 条数据，可用于分析。")
+    except Exception as e:
+        st.error(f"文件解析失败：{e}")
+
+# 读取数据
+if "data" not in st.session_state:
+    st.info("👆 请先上传历史数据文件（JSON 或 CSV）。")
+    st.stop()
+data = st.session_state["data"]
 
 # ========== 固定搭配 ==========
 FIXED_COMBOS = {
@@ -175,101 +149,56 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 参数调整（定义所有可能参数，默认值） ==========
+# ========== 参数调整（确保所有参数都有默认值） ==========
 params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_kdj'] = st.session_state.use_kdj
-    if params['use_kdj']:
-        params['kdj_n'] = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n')
-    else:
-        params['kdj_n'] = 9
+    params['kdj_n'] = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n') if params['use_kdj'] else 9
 
     params['use_skdj'] = st.session_state.use_skdj
-    if params['use_skdj']:
-        params['skdj_n'] = st.slider("SKDJ N", 5, 30, 9, key='skdj_n')
-        params['skdj_m'] = st.slider("SKDJ M", 2, 10, 3, key='skdj_m')
-    else:
-        params['skdj_n'] = 9
-        params['skdj_m'] = 3
+    params['skdj_n'] = st.slider("SKDJ N", 5, 30, 9, key='skdj_n') if params['use_skdj'] else 9
+    params['skdj_m'] = st.slider("SKDJ M", 2, 10, 3, key='skdj_m') if params['use_skdj'] else 3
 
     params['use_rsi'] = st.session_state.use_rsi
-    if params['use_rsi']:
-        params['rsi_period'] = st.slider("RSI 周期", 5, 30, 14, key='rsi_period')
-    else:
-        params['rsi_period'] = 14
+    params['rsi_period'] = st.slider("RSI 周期", 5, 30, 14, key='rsi_period') if params['use_rsi'] else 14
 
     params['use_wr'] = st.session_state.use_wr
-    if params['use_wr']:
-        params['wr_period'] = st.slider("WR 周期", 5, 30, 14, key='wr_period')
-    else:
-        params['wr_period'] = 14
+    params['wr_period'] = st.slider("WR 周期", 5, 30, 14, key='wr_period') if params['use_wr'] else 14
 
     params['use_bias'] = st.session_state.use_bias
-    if params['use_bias']:
-        params['bias_period'] = st.slider("BIAS 均线周期", 5, 60, 20, key='bias_period')
-    else:
-        params['bias_period'] = 20
+    params['bias_period'] = st.slider("BIAS 均线周期", 5, 60, 20, key='bias_period') if params['use_bias'] else 20
 
     params['use_cci'] = st.session_state.use_cci
-    if params['use_cci']:
-        params['cci_period'] = st.slider("CCI 周期", 5, 30, 20, key='cci_period')
-    else:
-        params['cci_period'] = 20
+    params['cci_period'] = st.slider("CCI 周期", 5, 30, 20, key='cci_period') if params['use_cci'] else 20
 
     params['use_roc'] = st.session_state.use_roc
-    if params['use_roc']:
-        params['roc_period'] = st.slider("ROC 周期", 5, 30, 12, key='roc_period')
-    else:
-        params['roc_period'] = 12
+    params['roc_period'] = st.slider("ROC 周期", 5, 30, 12, key='roc_period') if params['use_roc'] else 12
 
     params['use_ma'] = st.session_state.use_ma
-    if params['use_ma']:
-        params['ma_fast'] = st.slider("MA 快线周期", 2, 30, 5, key='ma_fast')
-        params['ma_slow'] = st.slider("MA 慢线周期", 5, 120, 20, key='ma_slow')
-    else:
-        params['ma_fast'] = 5
-        params['ma_slow'] = 20
+    params['ma_fast'] = st.slider("MA 快线周期", 2, 30, 5, key='ma_fast') if params['use_ma'] else 5
+    params['ma_slow'] = st.slider("MA 慢线周期", 5, 120, 20, key='ma_slow') if params['use_ma'] else 20
 
     params['use_macd'] = st.session_state.use_macd
-    if params['use_macd']:
-        params['macd_fast'] = st.slider("MACD 快线", 5, 30, 12, key='macd_fast')
-        params['macd_slow'] = st.slider("MACD 慢线", 10, 40, 26, key='macd_slow')
-        params['macd_signal'] = st.slider("MACD 信号线", 5, 15, 9, key='macd_signal')
-    else:
-        params['macd_fast'] = 12
-        params['macd_slow'] = 26
-        params['macd_signal'] = 9
+    params['macd_fast'] = st.slider("MACD 快线", 5, 30, 12, key='macd_fast') if params['use_macd'] else 12
+    params['macd_slow'] = st.slider("MACD 慢线", 10, 40, 26, key='macd_slow') if params['use_macd'] else 26
+    params['macd_signal'] = st.slider("MACD 信号线", 5, 15, 9, key='macd_signal') if params['use_macd'] else 9
 
     params['use_expma'] = st.session_state.use_expma
-    if params['use_expma']:
-        params['expma_short'] = st.slider("EXPMA 短期", 5, 30, 12, key='expma_short')
-        params['expma_long'] = st.slider("EXPMA 长期", 20, 60, 50, key='expma_long')
-    else:
-        params['expma_short'] = 12
-        params['expma_long'] = 50
+    params['expma_short'] = st.slider("EXPMA 短期", 5, 30, 12, key='expma_short') if params['use_expma'] else 12
+    params['expma_long'] = st.slider("EXPMA 长期", 20, 60, 50, key='expma_long') if params['use_expma'] else 50
 
     params['use_boll'] = st.session_state.use_boll
-    if params['use_boll']:
-        params['bb_period'] = st.slider("BOLL 周期", 10, 50, 20, key='bb_period')
-        params['bb_std'] = st.slider("标准差倍数", 1, 4, 2, key='bb_std')
-    else:
-        params['bb_period'] = 20
-        params['bb_std'] = 2
+    params['bb_period'] = st.slider("BOLL 周期", 10, 50, 20, key='bb_period') if params['use_boll'] else 20
+    params['bb_std'] = st.slider("标准差倍数", 1, 4, 2, key='bb_std') if params['use_boll'] else 2
 
     params['use_dmi'] = st.session_state.use_dmi
-    if params['use_dmi']:
-        params['dmi_period'] = st.slider("DMI 周期", 5, 30, 14, key='dmi_period')
-    else:
-        params['dmi_period'] = 14
+    params['dmi_period'] = st.slider("DMI 周期", 5, 30, 14, key='dmi_period') if params['use_dmi'] else 14
 
-    params['use_obv'] = st.session_state.use_obv
     params['use_vol'] = st.session_state.use_vol
-    if params['use_vol']:
-        params['vol_period'] = st.slider("均量周期", 5, 30, 20, key='vol_period')
-    else:
-        params['vol_period'] = 20
+    params['vol_period'] = st.slider("均量周期", 5, 30, 20, key='vol_period') if params['use_vol'] else 20
 
     params['use_sar'] = st.session_state.use_sar
+    params['use_obv'] = st.session_state.use_obv
     params['use_trend'] = st.session_state.use_trend
 
 # ========== 指标勾选区 ==========
@@ -297,7 +226,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎（完全基于 params 字典） ==========
+# ========== 指标计算（基于 params 字典） ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -478,19 +407,17 @@ def compute_all_features(df, p):
 if st.button("🔍 开始分析"):
     if not code:
         st.warning("请输入股票代码")
-    elif data is None:
-        st.warning("请先在线获取数据或上传本地文件。")
     else:
         features = compute_all_features(data, params)
         combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
         if len(combined) < 100:
-            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。\n请选择更靠后的分析日期。")
+            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。\n请选择更靠后的分析日期，或检查上传的数据是否包含足够的历史。")
             st.stop()
 
         target_date = pd.to_datetime(analysis_date)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
-            st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
+            st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值。")
         else:
             target_idx = date_rows.index[0]
             target_close = combined.loc[target_idx, "close"]
