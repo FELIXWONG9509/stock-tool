@@ -42,7 +42,6 @@ if uploaded_file is not None:
                 if not klines:
                     st.error("JSON文件中没有历史数据。")
                     st.stop()
-                # 拼接为完整CSV文本，使用pandas解析（列名严格按API文档）
                 csv_text = "\n".join(klines)
                 col_names = ["date","open","close","high","low","volume",
                              "amount","amplitude","pct_change","change","turnover"]
@@ -80,7 +79,6 @@ if uploaded_file is not None:
         for col in ["open","close","high","low","volume"]:
             df_upload[col] = df_upload[col].astype(str).str.replace(",","").str.strip()
             df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
-        # 强制转为正数（股价不可能为负）
         df_upload[["open","close","high","low"]] = df_upload[["open","close","high","low"]].abs()
         df_upload["volume"] = df_upload["volume"].abs()
         df_upload = df_upload.dropna(subset=["date","open","close","high","low","volume"]).sort_values("date").reset_index(drop=True)
@@ -245,7 +243,7 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎（关键修复：KDJ 使用 ffill 填充 NaN） ==========
+# ========== 指标计算引擎 ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -266,10 +264,6 @@ def compute_all_features(df, p):
         features["kdj_k"] = k_val / 100.0
         features["kdj_d"] = d_val / 100.0
         features["kdj_j"] = (3 * k_val - 2 * d_val) / 100.0
-        # 前向填充NaN，避免dropna删除整行
-        features["kdj_k"] = features["kdj_k"].ffill().bfill()
-        features["kdj_d"] = features["kdj_d"].ffill().bfill()
-        features["kdj_j"] = features["kdj_j"].ffill().bfill()
 
     if p['use_skdj']:
         n, m = p['skdj_n'], p['skdj_m']
@@ -283,11 +277,7 @@ def compute_all_features(df, p):
         features["skdj_k"] = skdj_k / 100.0
         features["skdj_d"] = skdj_d / 100.0
         features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
-        features["skdj_k"] = features["skdj_k"].ffill().bfill()
-        features["skdj_d"] = features["skdj_d"].ffill().bfill()
-        features["skdj_kd_diff"] = features["skdj_kd_diff"].ffill().bfill()
 
-    # 其他指标保持原样（它们通常不会产生大段NaN，如有需要也可加ffill，但非必需）
     if p['use_rsi']:
         period = p['rsi_period']
         delta = close.diff()
@@ -434,7 +424,13 @@ if st.button("🔍 开始分析"):
         st.warning("请输入股票代码")
     else:
         features = compute_all_features(data, params)
-        combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
+        combined = pd.concat([data[["date","close"]], features], axis=1)
+
+        # 关键修复：用前向/后向填充消除因窗口计算产生的NaN，避免dropna误删整行
+        combined = combined.ffill().bfill()
+        # 此时理论上不应有NaN，但保留dropna以防万一
+        combined = combined.dropna()
+
         if len(combined) < 100:
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。")
             st.stop()
