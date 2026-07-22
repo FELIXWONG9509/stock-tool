@@ -12,30 +12,14 @@ import re
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
 
-# ---------- 自动提取文件名中的股票代码 ----------
-def extract_code_from_filename(filename):
-    match = re.search(r'(sh|sz)\d{6}', filename, re.IGNORECASE)
-    if match:
-        return match.group(0)
-    match = re.search(r'(\d{6})', filename)
-    if match:
-        code = match.group(1)
-        return 'sh' + code if code.startswith('6') else 'sz' + code
-    return None
-
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
 code = st.text_input("股票代码（如 600887）", value=default_code)
 
-# ---------- 实时生成数据下载按钮 ----------
+# ---------- 实时生成数据下载按钮（使用 st.link_button，无缓存问题） ----------
 secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
 download_url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000"
-# 使用 HTML 链接，确保每次点击都打开最新地址
-st.markdown(
-    f'<a href="{download_url}" target="_blank" style="display:inline-block; padding:0.5em 1em; background:#4CAF50; color:white; border-radius:5px; text-decoration:none;">'
-    f'🌐 打开数据下载页面（在新标签页中打开，然后右键另存为 .json）</a>',
-    unsafe_allow_html=True
-)
+st.link_button("🌐 打开数据下载页面（在新标签页中打开，然后右键另存为 .json）", download_url)
 
 # ---------- 文件上传 ----------
 uploaded_file = st.file_uploader("📤 上传东方财富下载的 JSON 或 CSV 文件", type=["json", "csv"])
@@ -114,7 +98,7 @@ if "data" not in st.session_state:
     st.stop()
 data = st.session_state["data"]
 
-# ========== 侧边栏 ==========
+# ========== 侧边栏：所有控件 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
