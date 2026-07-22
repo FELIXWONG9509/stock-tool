@@ -15,8 +15,9 @@ if uploaded_file is not None:
         content = uploaded_file.getvalue().decode("utf-8-sig")
         raw_json = json.loads(content)
 
-        st.subheader("📦 原始 JSON 结构")
-        st.json(raw_json, expanded=False)
+        st.subheader("📦 原始 JSON 结构（可折叠）")
+        with st.expander("点击展开原始 JSON"):
+            st.json(raw_json, expanded=False)
 
         # 检查是否包含 klines
         if "data" not in raw_json or "klines" not in raw_json["data"]:
@@ -34,20 +35,29 @@ if uploaded_file is not None:
         csv_text = "\n".join(klines)
 
         # 显示原始文本（前500字符）
-        with st.expander("📄 原始数据文本（前500字符）"):
+        with st.expander("📄 原始数据文本（前500字符，可跳过）"):
             st.code(csv_text[:500], language="text")
 
-        # 定义列名
-        col_names = [
+        # 定义中文列名
+        col_names_cn = [
+            "日期", "开盘价", "收盘价", "最高价", "最低价", "成交量",
+            "成交额", "振幅", "涨跌幅", "涨跌额", "换手率"
+        ]
+        # 内部英文列名（方便处理）
+        col_names_en = [
             "date", "open", "close", "high", "low", "volume",
             "amount", "amplitude", "pct_change", "change", "turnover"
         ]
 
         # 用 pandas 解析
-        df = pd.read_csv(io.StringIO(csv_text), header=None, names=col_names)
+        df = pd.read_csv(io.StringIO(csv_text), header=None, names=col_names_en)
+
+        # 显示中文列名的表格
+        df_cn = df.copy()
+        df_cn.columns = col_names_cn
 
         st.subheader("📊 解析后的数据表格（前100行）")
-        st.dataframe(df.head(100), use_container_width=True)
+        st.dataframe(df_cn.head(100), use_container_width=True)
 
         st.subheader("📋 数据基本信息")
         col_info1, col_info2, col_info3 = st.columns(3)
@@ -60,41 +70,61 @@ if uploaded_file is not None:
             st.metric("数据结束日期", str(df["date"].iloc[-1]) if len(df) > 0 else "无")
 
         st.subheader("🔤 各列数据类型")
-        dtype_df = pd.DataFrame({
-            "列名": df.columns,
-            "数据类型": [str(df[col].dtype) for col in df.columns]
-        })
+        dtype_data = {
+            "中文名称": col_names_cn,
+            "数据类型": [str(df[col].dtype) for col in col_names_en]
+        }
+        dtype_df = pd.DataFrame(dtype_data)
         st.dataframe(dtype_df, use_container_width=True)
 
         st.subheader("📝 前5行数据样本")
-        st.dataframe(df.head(), use_container_width=True)
+        st.dataframe(df_cn.head(), use_container_width=True)
 
         st.subheader("📝 后5行数据样本")
-        st.dataframe(df.tail(), use_container_width=True)
+        st.dataframe(df_cn.tail(), use_container_width=True)
 
         # 尝试转换数值列
         st.subheader("🔢 数值列统计（转换后）")
-        numeric_cols = ["open", "close", "high", "low", "volume",
-                        "amount", "amplitude", "pct_change", "change", "turnover"]
-        for col in numeric_cols:
+        numeric_cols_en = ["open", "close", "high", "low", "volume",
+                           "amount", "amplitude", "pct_change", "change", "turnover"]
+        for col in numeric_cols_en:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        st.dataframe(df[numeric_cols].describe(), use_container_width=True)
+        # 用中文列名显示统计
+        stats_df = df[numeric_cols_en].describe()
+        stats_df.columns = [col_names_cn[i+1] for i in range(len(numeric_cols_en))]  # 跳过日期
+        st.dataframe(stats_df, use_container_width=True)
+
+        st.caption("""
+        **统计说明：**
+        - **count**：有效数据数量
+        - **mean**：平均值
+        - **std**：标准差（波动程度）
+        - **min**：最小值
+        - **25%**：25%分位数（有四分之一的数据小于此值）
+        - **50%**：中位数（一半数据小于此值）
+        - **75%**：75%分位数（有四分之三的数据小于此值）
+        - **max**：最大值
+        """)
 
         # 检查缺失值
         st.subheader("⚠️ 缺失值统计")
         missing = df.isnull().sum()
-        missing_df = pd.DataFrame({
-            "列名": missing.index,
-            "缺失数量": missing.values,
-            "缺失比例": (missing / len(df) * 100).round(2).astype(str) + "%"
-        })
+        missing_data = {
+            "中文名称": col_names_cn,
+            "缺失数量": [missing[col] for col in col_names_en],
+            "缺失比例": [f"{missing[col] / len(df) * 100:.2f}%" for col in col_names_en]
+        }
+        missing_df = pd.DataFrame(missing_data)
         st.dataframe(missing_df, use_container_width=True)
 
         # 只保留需要的列
-        st.subheader("✅ 最终用于分析的列（date, open, close, high, low, volume）")
-        final_df = df[["date", "open", "close", "high", "low", "volume"]].copy()
+        st.subheader("✅ 最终用于分析的列（日期、开盘价、收盘价、最高价、最低价、成交量）")
+        final_cols_en = ["date", "open", "close", "high", "low", "volume"]
+        final_cols_cn = ["日期", "开盘价", "收盘价", "最高价", "最低价", "成交量"]
+        final_df = df[final_cols_en].copy()
+        final_df.columns = final_cols_cn
         st.dataframe(final_df.head(100), use_container_width=True)
 
         # 下载解析后的 CSV
@@ -102,7 +132,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📥 下载解析后的 CSV 文件",
             data=csv_download,
-            file_name="parsed_data.csv",
+            file_name="解析后的数据.csv",
             mime="text/csv"
         )
 
