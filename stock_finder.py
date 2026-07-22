@@ -8,12 +8,10 @@ from datetime import datetime, timedelta, date
 import io
 import json
 import re
-import pandas_ta as ta
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
 
-# ---------- 自动提取文件名中的股票代码 ----------
 def extract_code_from_filename(filename):
     match = re.search(r'(sh|sz)\d{6}', filename, re.IGNORECASE)
     if match:
@@ -24,7 +22,6 @@ def extract_code_from_filename(filename):
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
 
-# 文件上传
 uploaded_file = st.file_uploader("📤 上传东方财富下载的 JSON 或 CSV 文件", type=["json", "csv"])
 
 if uploaded_file is not None:
@@ -75,7 +72,6 @@ if uploaded_file is not None:
                     st.error("CSV缺少必要列。")
                     st.stop()
 
-        # 数据清洗
         df_upload["date"] = pd.to_datetime(df_upload["date"], errors="coerce")
         for col in ["open","close","high","low","volume"]:
             df_upload[col] = df_upload[col].astype(str).str.replace(",","").str.strip()
@@ -94,7 +90,6 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# 股票代码输入
 default_code = st.session_state.get("auto_code", "600887")
 code = st.text_input("股票代码", value=default_code)
 
@@ -106,7 +101,6 @@ if "data" not in st.session_state:
     st.stop()
 data = st.session_state["data"]
 
-# ========== 固定搭配 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
@@ -167,13 +161,10 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 参数调整 ==========
 params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_kdj'] = st.session_state.use_kdj
     params['kdj_n'] = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n') if params['use_kdj'] else 9
-    params['kdj_m1'] = 3   # KDJ 平滑参数固定
-    params['kdj_m2'] = 3
 
     params['use_skdj'] = st.session_state.use_skdj
     params['skdj_n'] = st.slider("SKDJ N", 5, 30, 9, key='skdj_n') if params['use_skdj'] else 9
@@ -221,7 +212,6 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_obv'] = st.session_state.use_obv
     params['use_trend'] = st.session_state.use_trend
 
-# ========== 指标勾选区 ==========
 with st.sidebar.expander("⚡ 短线指标", expanded=True):
     use_kdj = st.checkbox("KDJ", key='use_kdj'); st.caption("超买超卖")
     use_skdj = st.checkbox("SKDJ", key='use_skdj'); st.caption("慢速KDJ")
@@ -246,101 +236,175 @@ if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎（使用 pandas_ta） ==========
+# ========== 纯Python指标计算（无任何第三方库依赖） ==========
 def compute_all_features(df, p):
-    close = df["close"]
-    high = df["high"]
-    low = df["low"]
-    volume = df["volume"]
+    close = df["close"].values
+    high = df["high"].values
+    low = df["low"].values
+    volume = df["volume"].values
     features = pd.DataFrame(index=df.index)
 
-    # KDJ
     if p['use_kdj']:
-        kdj = ta.kdj(high=high, low=low, close=close, length=p['kdj_n'], signal=3)
-        features["kdj_k"] = kdj[f"KDJ_K_{p['kdj_n']}_3"] / 100.0
-        features["kdj_d"] = kdj[f"KDJ_D_{p['kdj_n']}_3"] / 100.0
-        features["kdj_j"] = kdj[f"KDJ_J_{p['kdj_n']}_3"] / 100.0
+        n = p['kdj_n']
+        low_list = pd.Series(low).rolling(n).min().values
+        high_list = pd.Series(high).rolling(n).max().values
+        rsv = np.where((high_list - low_list) != 0, (close - low_list) / (high_list - low_list) * 100, 0.0)
+        k = np.zeros_like(rsv)
+        d = np.zeros_like(rsv)
+        for i in range(1, len(rsv)):
+            k[i] = 2/3 * k[i-1] + 1/3 * rsv[i]
+            d[i] = 2/3 * d[i-1] + 1/3 * k[i]
+        features["kdj_k"] = k / 100.0
+        features["kdj_d"] = d / 100.0
+        features["kdj_j"] = (3 * k - 2 * d) / 100.0
 
-    # SKDJ (慢速KDJ，用 pandas_ta 的慢速版本)
     if p['use_skdj']:
-        skdj = ta.kdj(high=high, low=low, close=close, length=p['skdj_n'], signal=3, offset=1)  # 模拟慢速
-        # pandas_ta 没有直接提供慢速KDJ，我们用两次平滑：先生成普通KDJ，再平滑一次
-        kdj_raw = ta.kdj(high=high, low=low, close=close, length=p['skdj_n'], signal=3)
-        slow_k = kdj_raw[f"KDJ_K_{p['skdj_n']}_3"].ewm(span=p['skdj_m']).mean()
-        slow_d = slow_k.ewm(span=p['skdj_m']).mean()
-        features["skdj_k"] = slow_k / 100.0
-        features["skdj_d"] = slow_d / 100.0
-        features["skdj_kd_diff"] = (slow_k - slow_d) / 100.0
+        n, m = p['skdj_n'], p['skdj_m']
+        low_n = pd.Series(low).rolling(n).min().values
+        high_n = pd.Series(high).rolling(n).max().values
+        rsv = np.where((high_n - low_n) != 0, (close - low_n) / (high_n - low_n) * 100, 0.0)
+        k_raw = np.zeros_like(rsv)
+        d_raw = np.zeros_like(rsv)
+        for i in range(1, len(rsv)):
+            k_raw[i] = 2/3 * k_raw[i-1] + 1/3 * rsv[i]
+            d_raw[i] = 2/3 * d_raw[i-1] + 1/3 * k_raw[i]
+        # 慢速平滑
+        skdj_k = pd.Series(d_raw).ewm(alpha=1/m, adjust=False).mean().values
+        skdj_d = pd.Series(skdj_k).ewm(alpha=1/m, adjust=False).mean().values
+        features["skdj_k"] = skdj_k / 100.0
+        features["skdj_d"] = skdj_d / 100.0
+        features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
 
     if p['use_rsi']:
-        rsi = ta.rsi(close, length=p['rsi_period'])
+        period = p['rsi_period']
+        delta = np.diff(close, prepend=close[0])
+        gain = np.maximum(delta, 0)
+        loss = -np.minimum(delta, 0)
+        avg_gain = pd.Series(gain).ewm(alpha=1/period, adjust=False).mean().values
+        avg_loss = pd.Series(loss).ewm(alpha=1/period, adjust=False).mean().values
+        rs = avg_gain / (avg_loss + 1e-10)
+        rsi = 100 - (100 / (1 + rs))
         features["rsi"] = rsi / 100.0
 
     if p['use_wr']:
-        wr = ta.willr(high=high, low=low, close=close, length=p['wr_period'])
+        period = p['wr_period']
+        high_n = pd.Series(high).rolling(period).max().values
+        low_n = pd.Series(low).rolling(period).min().values
+        wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
         features["wr"] = wr / -100.0
 
     if p['use_bias']:
-        ma = ta.sma(close, length=p['bias_period'])
-        features["bias"] = (close - ma) / ma
+        ma = pd.Series(close).rolling(p['bias_period']).mean().values
+        features["bias"] = (close - ma) / (ma + 1e-10)
 
     if p['use_cci']:
-        cci = ta.cci(high=high, low=low, close=close, length=p['cci_period'])
-        features["cci"] = cci.clip(-200, 200) / 200.0
+        tp = (high + low + close) / 3
+        ma_tp = pd.Series(tp).rolling(p['cci_period']).mean().values
+        mad = pd.Series(tp).rolling(p['cci_period']).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True).values
+        cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
+        features["cci"] = np.clip(cci, -200, 200) / 200.0
 
     if p['use_roc']:
-        roc = ta.roc(close, length=p['roc_period'])
-        features["roc"] = roc / 100.0
+        roc = (close[p['roc_period']:] - close[:-p['roc_period']]) / close[:-p['roc_period']] * 100
+        roc_full = np.concatenate([np.full(p['roc_period'], np.nan), roc])
+        features["roc"] = roc_full / 100.0
 
     if p['use_ma']:
-        fast_ma = ta.sma(close, length=p['ma_fast'])
-        slow_ma = ta.sma(close, length=p['ma_slow'])
-        features["ma_fast_dist"] = (close - fast_ma) / close
-        features["ma_slow_dist"] = (close - slow_ma) / close
-        features["ma_cross"] = (fast_ma - slow_ma) / close
+        fast_ma = pd.Series(close).rolling(p['ma_fast']).mean().values
+        slow_ma = pd.Series(close).rolling(p['ma_slow']).mean().values
+        features["ma_fast_dist"] = (close - fast_ma) / (close + 1e-10)
+        features["ma_slow_dist"] = (close - slow_ma) / (close + 1e-10)
+        features["ma_cross"] = (fast_ma - slow_ma) / (close + 1e-10)
 
     if p['use_macd']:
-        macd = ta.macd(close, fast=p['macd_fast'], slow=p['macd_slow'], signal=p['macd_signal'])
-        features["macd_hist_norm"] = macd[f"MACDh_{p['macd_fast']}_{p['macd_slow']}_{p['macd_signal']}"] / close
+        ema_fast = pd.Series(close).ewm(span=p['macd_fast']).mean().values
+        ema_slow = pd.Series(close).ewm(span=p['macd_slow']).mean().values
+        macd_line = ema_fast - ema_slow
+        signal = pd.Series(macd_line).ewm(span=p['macd_signal']).mean().values
+        macd_hist = macd_line - signal
+        features["macd_hist_norm"] = macd_hist / (close + 1e-10)
 
     if p['use_expma']:
-        ema_short = ta.ema(close, length=p['expma_short'])
-        ema_long = ta.ema(close, length=p['expma_long'])
-        features["expma_short_dist"] = (close - ema_short) / close
-        features["expma_long_dist"] = (close - ema_long) / close
-        features["expma_diff"] = (ema_short - ema_long) / close
+        ema_short = pd.Series(close).ewm(span=p['expma_short']).mean().values
+        ema_long = pd.Series(close).ewm(span=p['expma_long']).mean().values
+        features["expma_short_dist"] = (close - ema_short) / (close + 1e-10)
+        features["expma_long_dist"] = (close - ema_long) / (close + 1e-10)
+        features["expma_diff"] = (ema_short - ema_long) / (close + 1e-10)
 
     if p['use_boll']:
-        bb = ta.bbands(close, length=p['bb_period'], std=p['bb_std'])
-        lower = bb[f"BBL_{p['bb_period']}_{p['bb_std']}.0"]
-        upper = bb[f"BBU_{p['bb_period']}_{p['bb_std']}.0"]
+        mid = pd.Series(close).rolling(p['bb_period']).mean().values
+        std = pd.Series(close).rolling(p['bb_period']).std().values
+        upper = mid + p['bb_std'] * std
+        lower = mid - p['bb_std'] * std
         features["bb_position"] = (close - lower) / (upper - lower + 1e-10)
 
     if p['use_sar']:
-        sar = ta.psar(high=high, low=low, close=close)
-        features["sar_dist"] = (close - sar) / close
+        af, max_af = 0.02, 0.2
+        sar = np.zeros(len(close))
+        ep = np.zeros(len(close))
+        trend = np.ones(len(close))
+        sar[0], ep[0] = close[0], low[0]
+        for i in range(1, len(close)):
+            sar[i] = sar[i-1] + af * (ep[i-1] - sar[i-1])
+            if trend[i-1] == 1:
+                if low[i] < sar[i]:
+                    trend[i] = -1
+                    sar[i] = max(high[i], high[i-1])
+                    ep[i] = low[i]
+                    af = 0.02
+                else:
+                    trend[i] = 1
+                    if high[i] > ep[i-1]:
+                        ep[i] = high[i]
+                        af = min(af + 0.02, max_af)
+                    else:
+                        ep[i] = ep[i-1]
+            else:
+                if high[i] > sar[i]:
+                    trend[i] = 1
+                    sar[i] = min(low[i], low[i-1])
+                    ep[i] = high[i]
+                    af = 0.02
+                else:
+                    trend[i] = -1
+                    if low[i] < ep[i-1]:
+                        ep[i] = low[i]
+                        af = min(af + 0.02, max_af)
+                    else:
+                        ep[i] = ep[i-1]
+        features["sar_dist"] = (close - sar) / (close + 1e-10)
 
     if p['use_dmi']:
-        adx = ta.adx(high=high, low=low, close=close, length=p['dmi_period'])
-        pdi = adx[f"DMP_{p['dmi_period']}"] / 100.0
-        mdi = adx[f"DMN_{p['dmi_period']}"] / 100.0
-        adx_val = adx[f"ADX_{p['dmi_period']}"] / 100.0
-        features["dmi_plus"] = pdi
-        features["dmi_minus"] = mdi
-        features["dmi_adx"] = adx_val
-        features["dmi_diff"] = pdi - mdi
+        period = p['dmi_period']
+        up_move = np.diff(high, prepend=high[0])
+        down_move = -np.diff(low, prepend=low[0])
+        pdm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        mdm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        tr = np.maximum(high - low, np.abs(high - np.roll(close, 1)), np.abs(low - np.roll(close, 1)))
+        atr = pd.Series(tr).ewm(alpha=1/period, adjust=False).mean().values
+        pdm_smooth = pd.Series(pdm).ewm(alpha=1/period, adjust=False).mean().values
+        mdm_smooth = pd.Series(mdm).ewm(alpha=1/period, adjust=False).mean().values
+        pdi = 100 * pdm_smooth / (atr + 1e-10)
+        mdi = 100 * mdm_smooth / (atr + 1e-10)
+        dx = np.abs(pdi - mdi) / (pdi + mdi + 1e-10) * 100
+        adx = pd.Series(dx).ewm(alpha=1/period, adjust=False).mean().values
+        features["dmi_plus"] = pdi / 100.0
+        features["dmi_minus"] = mdi / 100.0
+        features["dmi_adx"] = adx / 100.0
+        features["dmi_diff"] = (pdi - mdi) / 100.0
 
     if p['use_obv']:
-        obv = ta.obv(close=close, volume=volume)
-        features["obv_change"] = obv.pct_change(5)
+        sign = np.sign(np.diff(close, prepend=close[0]))
+        obv = np.cumsum(sign * volume)
+        features["obv_change"] = pd.Series(obv).pct_change(5).values
 
     if p['use_vol']:
-        vol_ma = ta.sma(volume, length=p['vol_period'])
+        vol_ma = pd.Series(volume).rolling(p['vol_period']).mean().values
         features["vol_ratio"] = volume / vol_ma
 
     if p['use_trend']:
-        ma5 = ta.sma(close, length=5)
-        ma20 = ta.sma(close, length=20)
+        ma5 = pd.Series(close).rolling(5).mean().values
+        ma20 = pd.Series(close).rolling(20).mean().values
         features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
     return features
@@ -353,11 +417,8 @@ if st.button("🔍 开始分析"):
         features = compute_all_features(data, params)
         combined = pd.concat([data[["date","close"]], features], axis=1)
 
-        # 只保留非空的指标列（如果某列全NaN，直接丢弃）
         valid_cols = ["date", "close"] + [col for col in features.columns if features[col].notna().any()]
         combined = combined[valid_cols]
-
-        # 填充剩余NaN（先用前后值填充，最后填0）
         combined = combined.ffill().bfill().fillna(0)
 
         if len(combined) < 100:
@@ -382,7 +443,6 @@ if st.button("🔍 开始分析"):
             hist_mask[exclude_start:exclude_end] = False
             hist_feat = combined.loc[hist_mask, feature_cols].values
 
-            # 移除方差为零的特征列（防止标准化错误）
             if hist_feat.shape[1] > 0:
                 std = np.std(hist_feat, axis=0)
                 zero_var_mask = std == 0
