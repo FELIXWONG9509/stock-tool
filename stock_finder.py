@@ -7,6 +7,7 @@ from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 from datetime import datetime, timedelta, date
 import time
+import io
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
@@ -15,7 +16,79 @@ code = st.text_input("股票代码（如 600887）", "600887")
 analysis_date = st.date_input("📅 分析日期（默认今天，可选择历史日期）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 固定搭配定义（仅保留四个经典组合） ==========
+# ---------- 在线获取 & 上传区域 ----------
+st.subheader("📥 数据来源")
+col_dl, col_up = st.columns(2)
+with col_dl:
+    st.markdown("**方式一：在线获取（可能因网络失败）**")
+    if st.button("🌐 在线获取历史数据"):
+        with st.spinner("正在从东方财富获取数据..."):
+            try:
+                # 尝试获取上市时间，确定数据范围
+                try:
+                    info = ak.stock_individual_info_em(symbol=code)
+                    list_date_str = info.loc[info["item"] == "上市时间", "value"].values[0]
+                    list_date = pd.to_datetime(list_date_str)
+                    total_days = (datetime.now() - list_date).days
+                    request_days = min(total_days, 5 * 365)
+                    request_days = max(request_days, 60)
+                except:
+                    request_days = 5 * 365
+
+                end_date = datetime.now().strftime("%Y%m%d")
+                start_date = (datetime.now() - timedelta(days=request_days)).strftime("%Y%m%d")
+
+                df = ak.stock_zh_a_hist(symbol=code, period="daily",
+                                        start_date=start_date, end_date=end_date, adjust="qfq")
+                if df.empty:
+                    st.warning("未获取到数据，请检查代码或使用方式二上传。")
+                else:
+                    df = df.rename(columns={"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume"})
+                    df["date"] = pd.to_datetime(df["date"])
+                    df = df.sort_values("date").reset_index(drop=True)
+                    st.session_state.online_data = df
+                    st.success(f"✅ 在线获取成功，共 {len(df)} 条数据，可直接分析。")
+            except Exception as e:
+                st.error(f"在线获取失败（{e}）。请使用下方“方式二”上传本地数据。")
+                st.info("📥 可点击以下链接进入东方财富下载CSV文件（在新标签页打开）：")
+                st.markdown(f"[➡️ 打开 {code} 的历史数据页面](https://quote.eastmoney.com/concept/sh{code}.html)（深圳股票请手动改sh为sz）", unsafe_allow_html=True)
+
+with col_up:
+    st.markdown("**方式二：上传本地CSV文件**")
+    uploaded_file = st.file_uploader("从东方财富下载的CSV文件（必需包含日期、开盘、收盘、最高、最低、成交量）", type="csv")
+    if uploaded_file is not None:
+        try:
+            df_upload = pd.read_csv(uploaded_file)
+            # 统一列名（兼容中英文）
+            rename_map = {
+                "日期": "date", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "volume",
+                "date": "date", "open": "open", "close": "close",
+                "high": "high", "low": "low", "volume": "volume"
+            }
+            df_upload.columns = [col.strip().lower() for col in df_upload.columns]
+            col_map = {col: rename_map[col] for col in df_upload.columns if col in rename_map}
+            df_upload = df_upload.rename(columns=col_map)
+            required = ["date", "open", "close", "high", "low", "volume"]
+            if all(c in df_upload.columns for c in required):
+                df_upload["date"] = pd.to_datetime(df_upload["date"])
+                df_upload = df_upload[required].sort_values("date").reset_index(drop=True)
+                st.session_state.uploaded_data = df_upload
+                st.success("✅ 上传成功，将使用本地数据进行分析。")
+            else:
+                st.error("CSV缺少必要列：日期、开盘、收盘、最高、最低、成交量。请检查文件。")
+        except Exception as e:
+            st.error(f"读取文件出错：{e}")
+
+# 确定最终使用的数据
+if "online_data" in st.session_state:
+    data = st.session_state.online_data
+elif "uploaded_data" in st.session_state:
+    data = st.session_state.uploaded_data
+else:
+    data = None
+
+# ========== 固定搭配定义 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {
         "说明": "在下方短线/长线区域自由勾选指标，完全自定义。",
@@ -49,12 +122,10 @@ FIXED_COMBOS = {
     }
 }
 
-# 构建显示名映射（仅经典组合分类）
 display_to_combo = {}
 combo_options = ["自定义（手动选择）"]
 display_to_combo["自定义（手动选择）"] = "自定义（手动选择）"
 
-# 添加经典组合分类
 combo_options.append("── 经典组合 ──")
 classic_combos = [(name, info) for name, info in FIXED_COMBOS.items() if info.get("类别") == "经典组合"]
 for name, info in classic_combos:
@@ -62,7 +133,6 @@ for name, info in classic_combos:
     combo_options.append(display_name)
     display_to_combo[display_name] = name
 
-# 所有指标 key
 short_keys = ['use_kdj', 'use_skdj', 'use_rsi', 'use_wr', 'use_bias', 'use_cci', 'use_roc']
 long_keys = ['use_ma', 'use_macd', 'use_expma', 'use_boll', 'use_sar', 'use_dmi', 'use_obv', 'use_vol', 'use_trend']
 all_keys = short_keys + long_keys
@@ -73,14 +143,14 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
-# ========== 侧边栏顶部：重置按钮 ==========
+# ========== 重置按钮 ==========
 if st.sidebar.button("🔄 重置所有指标"):
     for k in all_keys:
         st.session_state[k] = False
     st.session_state.combo = "自定义（手动选择）"
     st.rerun()
 
-# ========== 侧边栏：固定搭配 ==========
+# ========== 固定搭配 ==========
 with st.sidebar.expander("📦 固定搭配", expanded=True):
     current_display = None
     for disp, combo in display_to_combo.items():
@@ -191,44 +261,6 @@ selected_any = any([st.session_state[k] for k in all_keys])
 if not selected_any:
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
-
-# ========== 数据获取（按上市时间取全部历史，无5年限制） ==========
-@st.cache_data
-def load_data(stock_code, analysis_date):
-    import random
-    max_retries = 8
-    for attempt in range(max_retries):
-        try:
-            # 尝试获取上市时间
-            try:
-                info = ak.stock_individual_info_em(symbol=stock_code)
-                list_date_str = info.loc[info["item"] == "上市时间", "value"].values[0]
-                list_date = pd.to_datetime(list_date_str)
-                total_days = (pd.to_datetime(analysis_date) - list_date).days
-                request_days = max(total_days, 60)  # 最少60天
-            except:
-                # 查不到上市时间，回退取5年
-                request_days = 5 * 365
-
-            end_date = pd.to_datetime(analysis_date).strftime("%Y%m%d")
-            start_date = (pd.to_datetime(analysis_date) - timedelta(days=request_days)).strftime("%Y%m%d")
-
-            df = ak.stock_zh_a_hist(symbol=stock_code, period="daily",
-                                    start_date=start_date, end_date=end_date, adjust="qfq")
-            if df.empty:
-                return None
-            df = df.rename(columns={"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume"})
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date").reset_index(drop=True)
-            return df
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait_time = random.uniform(3, 6)
-                time.sleep(wait_time)
-                continue
-            else:
-                st.error(f"数据获取失败，已重试{max_retries}次。错误: {e}")
-                return None
 
 # ========== 指标计算引擎 ==========
 def compute_all_features(df):
@@ -398,105 +430,102 @@ def compute_all_features(df):
 if st.button("🔍 开始分析"):
     if not code:
         st.warning("请输入股票代码")
+    elif data is None:
+        st.warning("请先在线获取数据或上传CSV文件。")
     else:
-        with st.spinner("下载数据并计算指标..."):
-            data = load_data(code, analysis_date)
-        if data is None:
-            st.error("无法获取数据，请检查代码是否正确")
+        features = compute_all_features(data)
+        combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
+        if len(combined) < 252:
+            st.error("有效历史数据不足，至少需1年以上")
         else:
-            features = compute_all_features(data)
-            combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
-            if len(combined) < 252:
-                st.error("有效历史数据不足，至少需1年以上")
+            target_date = pd.to_datetime(analysis_date)
+            date_rows = combined[combined["date"] == target_date]
+            if date_rows.empty:
+                st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值，请换一个交易日。")
             else:
-                target_date = pd.to_datetime(analysis_date)
-                date_rows = combined[combined["date"] == target_date]
-                if date_rows.empty:
-                    st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值，请换一个交易日。")
+                target_idx = date_rows.index[0]
+                target_close = combined.loc[target_idx, "close"]
+                st.success(f"📌 {target_date.date()} 收盘价：{target_close:.2f} 元")
+
+                feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
+                current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
+
+                exclude_start = max(0, target_idx - 20)
+                exclude_end = min(len(combined), target_idx + 21)
+                hist_mask = np.ones(len(combined), dtype=bool)
+                hist_mask[exclude_start:exclude_end] = False
+                hist_feat = combined.loc[hist_mask, feature_cols].values
+
+                if len(hist_feat) < 50:
+                    st.warning("排除分析日期附近后，历史相似样本数较少，结果可能有偏差")
+
+                scaler = StandardScaler()
+                scaler.fit(hist_feat)
+                hist_feat_scaled = scaler.transform(hist_feat)
+                current_feat_scaled = scaler.transform(current_feat)
+
+                sim = cosine_similarity(current_feat_scaled, hist_feat_scaled)[0]
+                top_k = min(50, len(sim))
+                top_idx = np.argsort(sim)[-top_k:][::-1]
+                hist_combined_idx = combined.loc[hist_mask].index.values
+                matched_indices = hist_combined_idx[top_idx]
+                sim_scores = sim[top_idx]
+
+                with st.expander("📊 当前分析日期的技术指标数值"):
+                    current_series = combined.loc[target_idx, feature_cols]
+                    current_df = pd.DataFrame({"指标": current_series.index, "数值": current_series.values})
+                    st.dataframe(current_df.set_index("指标"), use_container_width=True)
+
+                with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
+                    top_n_show = min(5, len(matched_indices))
+                    top_match_indices = matched_indices[:top_n_show]
+                    sim_indicators = combined.loc[top_match_indices, ["date"] + feature_cols].copy()
+                    sim_indicators["日期"] = sim_indicators["date"].dt.date
+                    sim_indicators = sim_indicators.drop(columns=["date"]).set_index("日期")
+                    st.dataframe(sim_indicators, use_container_width=True)
+
+                close_series = combined["close"].reset_index(drop=True)
+                rets = []
+                for idx in matched_indices:
+                    if idx + days_hold < len(close_series):
+                        ret = (close_series.iloc[idx + days_hold] / close_series.iloc[idx]) - 1
+                        rets.append(ret)
+
+                if len(rets) < 10:
+                    st.error("有效相似样本太少，无法统计")
                 else:
-                    target_idx = date_rows.index[0]
-                    target_close = combined.loc[target_idx, "close"]
-                    st.success(f"📌 {target_date.date()} 收盘价：{target_close:.2f} 元")
-
-                    feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
-                    current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
-
-                    exclude_start = max(0, target_idx - 20)
-                    exclude_end = min(len(combined), target_idx + 21)
-                    hist_mask = np.ones(len(combined), dtype=bool)
-                    hist_mask[exclude_start:exclude_end] = False
-                    hist_feat = combined.loc[hist_mask, feature_cols].values
-
-                    if len(hist_feat) < 50:
-                        st.warning("排除分析日期附近后，历史相似样本数较少，结果可能有偏差")
-
-                    scaler = StandardScaler()
-                    scaler.fit(hist_feat)
-                    hist_feat_scaled = scaler.transform(hist_feat)
-                    current_feat_scaled = scaler.transform(current_feat)
-
-                    sim = cosine_similarity(current_feat_scaled, hist_feat_scaled)[0]
-                    top_k = min(50, len(sim))
-                    top_idx = np.argsort(sim)[-top_k:][::-1]
-                    hist_combined_idx = combined.loc[hist_mask].index.values
-                    matched_indices = hist_combined_idx[top_idx]
-                    sim_scores = sim[top_idx]
-
-                    with st.expander("📊 当前分析日期的技术指标数值"):
-                        current_series = combined.loc[target_idx, feature_cols]
-                        current_df = pd.DataFrame({"指标": current_series.index, "数值": current_series.values})
-                        st.dataframe(current_df.set_index("指标"), use_container_width=True)
-
-                    with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
-                        top_n_show = min(5, len(matched_indices))
-                        top_match_indices = matched_indices[:top_n_show]
-                        sim_indicators = combined.loc[top_match_indices, ["date"] + feature_cols].copy()
-                        sim_indicators["日期"] = sim_indicators["date"].dt.date
-                        sim_indicators = sim_indicators.drop(columns=["date"]).set_index("日期")
-                        st.dataframe(sim_indicators, use_container_width=True)
-
-                    close_series = combined["close"].reset_index(drop=True)
-                    rets = []
-                    for idx in matched_indices:
-                        if idx + days_hold < len(close_series):
-                            ret = (close_series.iloc[idx + days_hold] / close_series.iloc[idx]) - 1
-                            rets.append(ret)
-
-                    if len(rets) < 10:
-                        st.error("有效相似样本太少，无法统计")
+                    ret_arr = np.array(rets)
+                    win_rate = (ret_arr > 0).mean()
+                    avg_ret = ret_arr.mean()
+                    pos = ret_arr[ret_arr > 0]
+                    neg = ret_arr[ret_arr < 0]
+                    if len(pos) > 0 and len(neg) > 0:
+                        pl_ratio = pos.mean() / abs(neg.mean())
                     else:
-                        ret_arr = np.array(rets)
-                        win_rate = (ret_arr > 0).mean()
-                        avg_ret = ret_arr.mean()
-                        pos = ret_arr[ret_arr > 0]
-                        neg = ret_arr[ret_arr < 0]
-                        if len(pos) > 0 and len(neg) > 0:
-                            pl_ratio = pos.mean() / abs(neg.mean())
-                        else:
-                            pl_ratio = np.inf if len(neg) == 0 else 0
+                        pl_ratio = np.inf if len(neg) == 0 else 0
 
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("上涨概率", f"{win_rate:.1%}")
-                        col2.metric("平均收益", f"{avg_ret:.2%}")
-                        col3.metric("盈亏比", f"{pl_ratio:.2f}")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("上涨概率", f"{win_rate:.1%}")
+                    col2.metric("平均收益", f"{avg_ret:.2%}")
+                    col3.metric("盈亏比", f"{pl_ratio:.2f}")
 
-                        if win_rate > 0.55 and avg_ret > 0:
-                            st.success("✅ 概率买点信号")
-                        else:
-                            st.info("ℹ️ 未达到高概率买点标准")
+                    if win_rate > 0.55 and avg_ret > 0:
+                        st.success("✅ 概率买点信号")
+                    else:
+                        st.info("ℹ️ 未达到高概率买点标准")
 
-                        fig = px.histogram(ret_arr, nbins=20,
-                                           title=f"相似历史持有{days_hold}天收益分布",
-                                           labels={"value": "收益率"}, opacity=0.7)
-                        fig.add_vline(x=0, line_dash="dash", line_color="red")
-                        st.plotly_chart(fig, use_container_width=True)
+                    fig = px.histogram(ret_arr, nbins=20,
+                                       title=f"相似历史持有{days_hold}天收益分布",
+                                       labels={"value": "收益率"}, opacity=0.7)
+                    fig.add_vline(x=0, line_dash="dash", line_color="red")
+                    st.plotly_chart(fig, use_container_width=True)
 
-                        with st.expander("查看相似历史日期及相似度"):
-                            match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
-                            sim_df = pd.DataFrame({
-                                "历史日期": match_dates.values[:len(sim_scores)],
-                                "相似度": sim_scores
-                            })
-                            st.dataframe(sim_df.head(20))
+                    with st.expander("查看相似历史日期及相似度"):
+                        match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
+                        sim_df = pd.DataFrame({
+                            "历史日期": match_dates.values[:len(sim_scores)],
+                            "相似度": sim_scores
+                        })
+                        st.dataframe(sim_df.head(20))
 
-                        st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
+                    st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
