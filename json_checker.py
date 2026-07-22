@@ -5,7 +5,7 @@ import io
 
 st.set_page_config(page_title="JSON 数据检查工具", layout="wide")
 st.title("🔍 JSON 数据解析检查器")
-st.caption("上传东方财富下载的 JSON 文件，查看解析后的数据是否正确。")
+st.caption("上传东方财富下载的 JSON 文件，查看解析后的全部数据是否正确。")
 
 uploaded_file = st.file_uploader("📤 上传 JSON 文件", type=["json"])
 
@@ -34,10 +34,6 @@ if uploaded_file is not None:
         # 将 klines 转为 CSV 文本
         csv_text = "\n".join(klines)
 
-        # 显示原始文本（前500字符）
-        with st.expander("📄 原始数据文本（前500字符，可跳过）"):
-            st.code(csv_text[:500], language="text")
-
         # 定义中文列名
         col_names_cn = [
             "日期", "开盘价", "收盘价", "最高价", "最低价", "成交量",
@@ -56,8 +52,9 @@ if uploaded_file is not None:
         df_cn = df.copy()
         df_cn.columns = col_names_cn
 
-        st.subheader("📊 解析后的数据表格（前100行）")
-        st.dataframe(df_cn.head(100), use_container_width=True)
+        # ====== 显示全部数据 ======
+        st.subheader(f"📊 解析后的全部数据（共 {len(df_cn)} 行）")
+        st.dataframe(df_cn, use_container_width=True, height=600)
 
         st.subheader("📋 数据基本信息")
         col_info1, col_info2, col_info3 = st.columns(3)
@@ -93,7 +90,7 @@ if uploaded_file is not None:
 
         # 用中文列名显示统计
         stats_df = df[numeric_cols_en].describe()
-        stats_df.columns = [col_names_cn[i+1] for i in range(len(numeric_cols_en))]  # 跳过日期
+        stats_df.columns = [col_names_cn[i+1] for i in range(len(numeric_cols_en))]
         st.dataframe(stats_df, use_container_width=True)
 
         st.caption("""
@@ -125,7 +122,7 @@ if uploaded_file is not None:
         final_cols_cn = ["日期", "开盘价", "收盘价", "最高价", "最低价", "成交量"]
         final_df = df[final_cols_en].copy()
         final_df.columns = final_cols_cn
-        st.dataframe(final_df.head(100), use_container_width=True)
+        st.dataframe(final_df, use_container_width=True, height=600)
 
         # 下载解析后的 CSV
         csv_download = final_df.to_csv(index=False).encode("utf-8-sig")
