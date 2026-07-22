@@ -17,7 +17,7 @@ code = st.text_input("股票代码（如 600887）", "600887")
 analysis_date = st.date_input("📅 分析日期（默认今天，可选择历史日期）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ---------- 数据来源区域 ----------
+# ---------- 数据来源 ----------
 st.subheader("📥 数据来源")
 col_dl, col_up = st.columns(2)
 with col_dl:
@@ -34,12 +34,9 @@ with col_dl:
                     request_days = max(request_days, 60)
                 except:
                     request_days = 5 * 365
-
                 end_date = datetime.now().strftime("%Y%m%d")
                 start_date = (datetime.now() - timedelta(days=request_days)).strftime("%Y%m%d")
-
-                df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                        start_date=start_date, end_date=end_date, adjust="qfq")
+                df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
                 if df.empty:
                     st.warning("未获取到数据，请检查代码或使用方式二上传。")
                 else:
@@ -50,9 +47,8 @@ with col_dl:
                     st.success(f"✅ 在线获取成功，共 {len(df)} 条数据。")
             except Exception as e:
                 st.error(f"在线获取失败（{e}）。请使用下方方式二上传本地文件。")
-                st.info("📥 推荐使用JSON格式下载（解析最稳定）：")
+                st.info("📥 推荐使用JSON格式下载：")
                 st.markdown(f"[➡️ 下载 {code} 的JSON数据](http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000&ut=fa5fd1943c7b386f172d6893dbfba10b&cb=) （右键→另存为→文件名.json）", unsafe_allow_html=True)
-                st.markdown(f"或者CSV：[➡️ 下载 {code} 的CSV数据](http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=10000) （右键→另存为→文件名.csv）", unsafe_allow_html=True)
 
 with col_up:
     st.markdown("**方式二：上传本地文件（JSON或CSV）**")
@@ -88,20 +84,15 @@ with col_up:
                     df_upload.columns = columns
                 else:
                     df_upload = pd.read_csv(io.StringIO(content))
-                    rename_map = {
-                        "日期": "date", "开盘": "open", "收盘": "close",
-                        "最高": "high", "最低": "low", "成交量": "volume",
-                        "date": "date", "open": "open", "close": "close",
-                        "high": "high", "low": "low", "volume": "volume"
-                    }
+                    rename_map = {"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume",
+                                  "date":"date","open":"open","close":"close","high":"high","low":"low","volume":"volume"}
                     df_upload.columns = [col.strip().lower() for col in df_upload.columns]
-                    col_map = {col: rename_map[col] for col in df_upload.columns if col in rename_map}
+                    col_map = {col:rename_map[col] for col in df_upload.columns if col in rename_map}
                     df_upload = df_upload.rename(columns=col_map)
                     required = ["date","open","close","high","low","volume"]
                     if not all(c in df_upload.columns for c in required):
                         st.error("缺少必要列，请检查文件或改用JSON。")
                         st.stop()
-
             df_upload["date"] = pd.to_datetime(df_upload["date"])
             for col in ["open","close","high","low","volume"]:
                 df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
@@ -121,52 +112,27 @@ elif "uploaded_data" in st.session_state:
 else:
     data = None
 
-# ========== 固定搭配定义 ==========
+# ========== 固定搭配 ==========
 FIXED_COMBOS = {
-    "自定义（手动选择）": {
-        "说明": "在下方短线/长线区域自由勾选指标，完全自定义。",
-        "适合周期": "不限",
-        "类别": "",
-        "keys": []
-    },
-    "BOLL + KDJ 经典组合": {
-        "说明": "布林带判断趋势与空间，KDJ判断短线买卖时机。多头回踩中下轨+KDJ低位金叉买入；冲上轨+KDJ高位死叉卖出。",
-        "适合周期": "10天 ~ 60天",
-        "类别": "经典组合",
-        "keys": ["use_boll", "use_kdj"]
-    },
-    "MACD + OBV 量价组合": {
-        "说明": "MACD判断趋势，OBV验证量能。金叉+OBV上升=可信上涨；死叉+OBV下降=可靠下跌。",
-        "适合周期": "20天 ~ 100天",
-        "类别": "经典组合",
-        "keys": ["use_macd", "use_obv"]
-    },
-    "EXPMA + CCI 短线组合": {
-        "说明": "EXPMA提供支撑压力，CCI捕捉超买超卖与突破。回踩EXPMA+CCI拐头为买点；CCI上破+100为加速信号。",
-        "适合周期": "5天 ~ 30天",
-        "类别": "经典组合",
-        "keys": ["use_expma", "use_cci"]
-    },
-    "DMI + SAR 多空组合": {
-        "说明": "DMI判断趋势强度（ADX>25），SAR提供止损。PDI上穿MDI+ADX上升+SAR红点，预示主升浪。",
-        "适合周期": "20天 ~ 150天",
-        "类别": "经典组合",
-        "keys": ["use_dmi", "use_sar"]
-    }
+    "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
+    "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
+    "MACD + OBV 量价组合": {"说明":"MACD趋势+OBV能量验证。","适合周期":"20~100天","类别":"经典组合","keys":["use_macd","use_obv"]},
+    "EXPMA + CCI 短线组合": {"说明":"EXPMA支撑压力+CCI超买超卖。","适合周期":"5~30天","类别":"经典组合","keys":["use_expma","use_cci"]},
+    "DMI + SAR 多空组合": {"说明":"DMI趋势强度+SAR止损。","适合周期":"20~150天","类别":"经典组合","keys":["use_dmi","use_sar"]}
 }
 
 display_to_combo = {}
 combo_options = ["自定义（手动选择）"]
 display_to_combo["自定义（手动选择）"] = "自定义（手动选择）"
 combo_options.append("── 经典组合 ──")
-classic_combos = [(name, info) for name, info in FIXED_COMBOS.items() if info.get("类别") == "经典组合"]
-for name, info in classic_combos:
-    display_name = f"   {name}"
-    combo_options.append(display_name)
-    display_to_combo[display_name] = name
+for name, info in FIXED_COMBOS.items():
+    if info["类别"] == "经典组合":
+        display_name = f"   {name}"
+        combo_options.append(display_name)
+        display_to_combo[display_name] = name
 
-short_keys = ['use_kdj', 'use_skdj', 'use_rsi', 'use_wr', 'use_bias', 'use_cci', 'use_roc']
-long_keys = ['use_ma', 'use_macd', 'use_expma', 'use_boll', 'use_sar', 'use_dmi', 'use_obv', 'use_vol', 'use_trend']
+short_keys = ['use_kdj','use_skdj','use_rsi','use_wr','use_bias','use_cci','use_roc']
+long_keys = ['use_ma','use_macd','use_expma','use_boll','use_sar','use_dmi','use_obv','use_vol','use_trend']
 all_keys = short_keys + long_keys
 
 for k in all_keys:
@@ -175,14 +141,14 @@ for k in all_keys:
 if 'combo' not in st.session_state:
     st.session_state.combo = "自定义（手动选择）"
 
-# ========== 重置按钮 ==========
+# 重置
 if st.sidebar.button("🔄 重置所有指标"):
     for k in all_keys:
         st.session_state[k] = False
     st.session_state.combo = "自定义（手动选择）"
     st.rerun()
 
-# ========== 固定搭配 ==========
+# 固定搭配选择
 with st.sidebar.expander("📦 固定搭配", expanded=True):
     current_display = None
     for disp, combo in display_to_combo.items():
@@ -191,19 +157,12 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
             break
     if current_display is None:
         current_display = "自定义（手动选择）"
-
-    selected_display = st.selectbox(
-        "选择一组经典指标组合",
-        combo_options,
-        index=combo_options.index(current_display) if current_display in combo_options else 0
-    )
-
+    selected_display = st.selectbox("选择一组经典指标组合", combo_options,
+                                    index=combo_options.index(current_display) if current_display in combo_options else 0)
     if selected_display.startswith("──"):
         selected_display = "自定义（手动选择）"
-        st.warning("请选择一个具体组合，已自动切换为自定义模式。")
-
+        st.warning("请选择一个具体组合。")
     chosen_combo = display_to_combo.get(selected_display, "自定义（手动选择）")
-
     if chosen_combo != st.session_state.combo:
         st.session_state.combo = chosen_combo
         for k in all_keys:
@@ -211,100 +170,145 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
         for k in FIXED_COMBOS[chosen_combo]["keys"]:
             st.session_state[k] = True
         st.rerun()
-
     info = FIXED_COMBOS[chosen_combo]
     st.caption(f"**{chosen_combo}**")
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 参数调整 ==========
+# ========== 参数调整（定义所有可能参数，默认值） ==========
+params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
-    if st.session_state.use_kdj:
-        kdj_n = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n')
-    if st.session_state.use_skdj:
-        skdj_n = st.slider("SKDJ N", 5, 30, 9, key='skdj_n')
-        skdj_m = st.slider("SKDJ M", 2, 10, 3, key='skdj_m')
-    if st.session_state.use_rsi:
-        rsi_period = st.slider("RSI 周期", 5, 30, 14, key='rsi_period')
-    if st.session_state.use_wr:
-        wr_period = st.slider("WR 周期", 5, 30, 14, key='wr_period')
-    if st.session_state.use_bias:
-        bias_period = st.slider("BIAS 均线周期", 5, 60, 20, key='bias_period')
-    if st.session_state.use_cci:
-        cci_period = st.slider("CCI 周期", 5, 30, 20, key='cci_period')
-    if st.session_state.use_roc:
-        roc_period = st.slider("ROC 周期", 5, 30, 12, key='roc_period')
-    if st.session_state.use_ma:
-        ma_fast = st.slider("MA 快线周期", 2, 30, 5, key='ma_fast')
-        ma_slow = st.slider("MA 慢线周期", 5, 120, 20, key='ma_slow')
-    if st.session_state.use_macd:
-        macd_fast = st.slider("MACD 快线", 5, 30, 12, key='macd_fast')
-        macd_slow = st.slider("MACD 慢线", 10, 40, 26, key='macd_slow')
-        macd_signal = st.slider("MACD 信号线", 5, 15, 9, key='macd_signal')
-    if st.session_state.use_expma:
-        expma_short = st.slider("EXPMA 短期", 5, 30, 12, key='expma_short')
-        expma_long = st.slider("EXPMA 长期", 20, 60, 50, key='expma_long')
-    if st.session_state.use_boll:
-        bb_period = st.slider("BOLL 周期", 10, 50, 20, key='bb_period')
-        bb_std = st.slider("标准差倍数", 1, 4, 2, key='bb_std')
-    if st.session_state.use_dmi:
-        dmi_period = st.slider("DMI 周期", 5, 30, 14, key='dmi_period')
-    if st.session_state.use_vol:
-        vol_period = st.slider("均量周期", 5, 30, 20, key='vol_period')
+    params['use_kdj'] = st.session_state.use_kdj
+    if params['use_kdj']:
+        params['kdj_n'] = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n')
+    else:
+        params['kdj_n'] = 9
+
+    params['use_skdj'] = st.session_state.use_skdj
+    if params['use_skdj']:
+        params['skdj_n'] = st.slider("SKDJ N", 5, 30, 9, key='skdj_n')
+        params['skdj_m'] = st.slider("SKDJ M", 2, 10, 3, key='skdj_m')
+    else:
+        params['skdj_n'] = 9
+        params['skdj_m'] = 3
+
+    params['use_rsi'] = st.session_state.use_rsi
+    if params['use_rsi']:
+        params['rsi_period'] = st.slider("RSI 周期", 5, 30, 14, key='rsi_period')
+    else:
+        params['rsi_period'] = 14
+
+    params['use_wr'] = st.session_state.use_wr
+    if params['use_wr']:
+        params['wr_period'] = st.slider("WR 周期", 5, 30, 14, key='wr_period')
+    else:
+        params['wr_period'] = 14
+
+    params['use_bias'] = st.session_state.use_bias
+    if params['use_bias']:
+        params['bias_period'] = st.slider("BIAS 均线周期", 5, 60, 20, key='bias_period')
+    else:
+        params['bias_period'] = 20
+
+    params['use_cci'] = st.session_state.use_cci
+    if params['use_cci']:
+        params['cci_period'] = st.slider("CCI 周期", 5, 30, 20, key='cci_period')
+    else:
+        params['cci_period'] = 20
+
+    params['use_roc'] = st.session_state.use_roc
+    if params['use_roc']:
+        params['roc_period'] = st.slider("ROC 周期", 5, 30, 12, key='roc_period')
+    else:
+        params['roc_period'] = 12
+
+    params['use_ma'] = st.session_state.use_ma
+    if params['use_ma']:
+        params['ma_fast'] = st.slider("MA 快线周期", 2, 30, 5, key='ma_fast')
+        params['ma_slow'] = st.slider("MA 慢线周期", 5, 120, 20, key='ma_slow')
+    else:
+        params['ma_fast'] = 5
+        params['ma_slow'] = 20
+
+    params['use_macd'] = st.session_state.use_macd
+    if params['use_macd']:
+        params['macd_fast'] = st.slider("MACD 快线", 5, 30, 12, key='macd_fast')
+        params['macd_slow'] = st.slider("MACD 慢线", 10, 40, 26, key='macd_slow')
+        params['macd_signal'] = st.slider("MACD 信号线", 5, 15, 9, key='macd_signal')
+    else:
+        params['macd_fast'] = 12
+        params['macd_slow'] = 26
+        params['macd_signal'] = 9
+
+    params['use_expma'] = st.session_state.use_expma
+    if params['use_expma']:
+        params['expma_short'] = st.slider("EXPMA 短期", 5, 30, 12, key='expma_short')
+        params['expma_long'] = st.slider("EXPMA 长期", 20, 60, 50, key='expma_long')
+    else:
+        params['expma_short'] = 12
+        params['expma_long'] = 50
+
+    params['use_boll'] = st.session_state.use_boll
+    if params['use_boll']:
+        params['bb_period'] = st.slider("BOLL 周期", 10, 50, 20, key='bb_period')
+        params['bb_std'] = st.slider("标准差倍数", 1, 4, 2, key='bb_std')
+    else:
+        params['bb_period'] = 20
+        params['bb_std'] = 2
+
+    params['use_dmi'] = st.session_state.use_dmi
+    if params['use_dmi']:
+        params['dmi_period'] = st.slider("DMI 周期", 5, 30, 14, key='dmi_period')
+    else:
+        params['dmi_period'] = 14
+
+    params['use_obv'] = st.session_state.use_obv
+    params['use_vol'] = st.session_state.use_vol
+    if params['use_vol']:
+        params['vol_period'] = st.slider("均量周期", 5, 30, 20, key='vol_period')
+    else:
+        params['vol_period'] = 20
+
+    params['use_sar'] = st.session_state.use_sar
+    params['use_trend'] = st.session_state.use_trend
 
 # ========== 指标勾选区 ==========
-with st.sidebar.expander("⚡ 短线指标（可增减）", expanded=True):
-    use_kdj = st.checkbox("KDJ (随机指标)", key='use_kdj')
-    st.caption("K/D/J三线，反映超买超卖与交叉信号。")
-    use_skdj = st.checkbox("SKDJ (慢速随机指标)", key='use_skdj')
-    st.caption("慢速平滑KDJ，适合波段拐点判断。")
-    use_rsi = st.checkbox("RSI (相对强弱)", key='use_rsi')
-    st.caption("0~100摆动，>70超买，<30超卖。")
-    use_wr = st.checkbox("WR (威廉指标)", key='use_wr')
-    st.caption("与KDJ类似，-80以下超卖，-20以上超买。")
-    use_bias = st.checkbox("BIAS (乖离率)", key='use_bias')
-    st.caption("收盘价与均线的偏离程度，捕捉回归机会。")
-    use_cci = st.checkbox("CCI (商品通道指数)", key='use_cci')
-    st.caption("突破+100/-100为强/弱势信号。")
-    use_roc = st.checkbox("ROC (变动速率)", key='use_roc')
-    st.caption("价格N日涨跌幅，衡量趋势速度。")
+with st.sidebar.expander("⚡ 短线指标", expanded=True):
+    use_kdj = st.checkbox("KDJ", key='use_kdj'); st.caption("超买超卖")
+    use_skdj = st.checkbox("SKDJ", key='use_skdj'); st.caption("慢速KDJ")
+    use_rsi = st.checkbox("RSI", key='use_rsi'); st.caption("相对强弱")
+    use_wr = st.checkbox("WR", key='use_wr'); st.caption("威廉指标")
+    use_bias = st.checkbox("BIAS", key='use_bias'); st.caption("乖离率")
+    use_cci = st.checkbox("CCI", key='use_cci'); st.caption("商品通道指数")
+    use_roc = st.checkbox("ROC", key='use_roc'); st.caption("变动速率")
 
-with st.sidebar.expander("📊 长线指标（可增减）", expanded=True):
-    use_ma = st.checkbox("MA (均线排列)", key='use_ma')
-    st.caption("多周期均线位置与多头排列强度。")
-    use_macd = st.checkbox("MACD", key='use_macd')
-    st.caption("快慢线差与柱体，反映趋势动能。")
-    use_expma = st.checkbox("EXPMA (指数均线)", key='use_expma')
-    st.caption("近期价格偏重，反应更快。")
-    use_boll = st.checkbox("BOLL (布林带)", key='use_boll')
-    st.caption("上下轨与中轨的相对位置。")
-    use_sar = st.checkbox("SAR (抛物线转向)", key='use_sar')
-    st.caption("停损点，价格与SAR的距离反映趋势强度。")
-    use_dmi = st.checkbox("DMI (趋向指标)", key='use_dmi')
-    st.caption("PDI/MDI/ADX，判断趋势有无及方向。")
-    use_obv = st.checkbox("OBV (能量潮)", key='use_obv')
-    st.caption("成交量累计，验证价格趋势。")
-    use_vol = st.checkbox("量比", key='use_vol')
-    st.caption("当日量与近期均量之比。")
-    use_trend = st.checkbox("短期趋势强度", key='use_trend')
-    st.caption("5日与20日线的距离，正为多头。")
+with st.sidebar.expander("📊 长线指标", expanded=True):
+    use_ma = st.checkbox("MA", key='use_ma'); st.caption("均线排列")
+    use_macd = st.checkbox("MACD", key='use_macd'); st.caption("趋势动能")
+    use_expma = st.checkbox("EXPMA", key='use_expma'); st.caption("指数均线")
+    use_boll = st.checkbox("BOLL", key='use_boll'); st.caption("布林带")
+    use_sar = st.checkbox("SAR", key='use_sar'); st.caption("抛物线转向")
+    use_dmi = st.checkbox("DMI", key='use_dmi'); st.caption("趋向指标")
+    use_obv = st.checkbox("OBV", key='use_obv'); st.caption("能量潮")
+    use_vol = st.checkbox("量比", key='use_vol'); st.caption("放量缩量")
+    use_trend = st.checkbox("短期趋势强度", key='use_trend'); st.caption("5日/20日")
 
-selected_any = any([st.session_state[k] for k in all_keys])
-if not selected_any:
+if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
     st.stop()
 
-# ========== 指标计算引擎 ==========
-def compute_all_features(df):
+# ========== 指标计算引擎（完全基于 params 字典） ==========
+def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
     low = df["low"]
     volume = df["volume"]
     features = pd.DataFrame(index=df.index)
 
-    if use_kdj:
-        low_min = low.rolling(kdj_n).min()
-        high_max = high.rolling(kdj_n).max()
+    if p['use_kdj']:
+        n = p['kdj_n']
+        low_min = low.rolling(n).min()
+        high_max = high.rolling(n).max()
         rsv = (close - low_min) / (high_max - low_min + 1e-10) * 100
         k_val = rsv.copy()
         d_val = rsv.copy()
@@ -315,80 +319,90 @@ def compute_all_features(df):
         features["kdj_d"] = d_val / 100.0
         features["kdj_j"] = (3 * k_val - 2 * d_val) / 100.0
 
-    if use_skdj:
-        low_n = low.rolling(skdj_n).min()
-        high_n = high.rolling(skdj_n).max()
+    if p['use_skdj']:
+        n, m = p['skdj_n'], p['skdj_m']
+        low_n = low.rolling(n).min()
+        high_n = high.rolling(n).max()
         rsv = (close - low_n) / (high_n - low_n + 1e-10) * 100
-        k = rsv.ewm(alpha=1/skdj_m, adjust=False).mean()
-        d = k.ewm(alpha=1/skdj_m, adjust=False).mean()
+        k = rsv.ewm(alpha=1/m, adjust=False).mean()
+        d = k.ewm(alpha=1/m, adjust=False).mean()
         skdj_k = d
-        skdj_d = d.ewm(alpha=1/skdj_m, adjust=False).mean()
+        skdj_d = d.ewm(alpha=1/m, adjust=False).mean()
         features["skdj_k"] = skdj_k / 100.0
         features["skdj_d"] = skdj_d / 100.0
         features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
 
-    if use_rsi:
+    if p['use_rsi']:
+        period = p['rsi_period']
         delta = close.diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
-        avg_gain = gain.ewm(alpha=1/rsi_period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/rsi_period, adjust=False).mean()
+        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
         features["rsi"] = rsi / 100.0
 
-    if use_wr:
-        high_n = high.rolling(wr_period).max()
-        low_n = low.rolling(wr_period).min()
+    if p['use_wr']:
+        period = p['wr_period']
+        high_n = high.rolling(period).max()
+        low_n = low.rolling(period).min()
         wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
         features["wr"] = wr / -100.0
 
-    if use_bias:
-        ma = close.rolling(bias_period).mean()
+    if p['use_bias']:
+        period = p['bias_period']
+        ma = close.rolling(period).mean()
         features["bias"] = (close - ma) / ma
 
-    if use_cci:
+    if p['use_cci']:
+        period = p['cci_period']
         tp = (high + low + close) / 3
-        ma_tp = tp.rolling(cci_period).mean()
-        mad = tp.rolling(cci_period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
+        ma_tp = tp.rolling(period).mean()
+        mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
         cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
         cci_clipped = cci.clip(-200, 200)
         features["cci"] = cci_clipped / 200.0
 
-    if use_roc:
-        roc = close.pct_change(roc_period) * 100
+    if p['use_roc']:
+        period = p['roc_period']
+        roc = close.pct_change(period) * 100
         features["roc"] = roc / 100.0
 
-    if use_ma:
-        ma_fast_val = close.rolling(ma_fast).mean()
-        ma_slow_val = close.rolling(ma_slow).mean()
+    if p['use_ma']:
+        fast, slow = p['ma_fast'], p['ma_slow']
+        ma_fast_val = close.rolling(fast).mean()
+        ma_slow_val = close.rolling(slow).mean()
         features["ma_fast_dist"] = (close - ma_fast_val) / close
         features["ma_slow_dist"] = (close - ma_slow_val) / close
         features["ma_cross"] = (ma_fast_val - ma_slow_val) / close
 
-    if use_macd:
-        ema_fast = close.ewm(span=macd_fast).mean()
-        ema_slow = close.ewm(span=macd_slow).mean()
+    if p['use_macd']:
+        fast, slow, sig = p['macd_fast'], p['macd_slow'], p['macd_signal']
+        ema_fast = close.ewm(span=fast).mean()
+        ema_slow = close.ewm(span=slow).mean()
         macd_line = ema_fast - ema_slow
-        signal = macd_line.ewm(span=macd_signal).mean()
+        signal = macd_line.ewm(span=sig).mean()
         macd_hist = macd_line - signal
         features["macd_hist_norm"] = macd_hist / (close + 1e-10)
 
-    if use_expma:
-        ema_short = close.ewm(span=expma_short).mean()
-        ema_long = close.ewm(span=expma_long).mean()
+    if p['use_expma']:
+        short, long = p['expma_short'], p['expma_long']
+        ema_short = close.ewm(span=short).mean()
+        ema_long = close.ewm(span=long).mean()
         features["expma_short_dist"] = (close - ema_short) / close
         features["expma_long_dist"] = (close - ema_long) / close
         features["expma_diff"] = (ema_short - ema_long) / close
 
-    if use_boll:
-        bb_mid = close.rolling(bb_period).mean()
-        bb_std_val = close.rolling(bb_period).std()
-        bb_upper = bb_mid + bb_std * bb_std_val
-        bb_lower = bb_mid - bb_std * bb_std_val
+    if p['use_boll']:
+        period, std_mult = p['bb_period'], p['bb_std']
+        bb_mid = close.rolling(period).mean()
+        bb_std_val = close.rolling(period).std()
+        bb_upper = bb_mid + std_mult * bb_std_val
+        bb_lower = bb_mid - std_mult * bb_std_val
         features["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
 
-    if use_sar:
+    if p['use_sar']:
         af = 0.02
         max_af = 0.2
         sar = pd.Series(np.nan, index=close.index)
@@ -424,67 +438,65 @@ def compute_all_features(df):
         sar.iloc[0] = close.iloc[0]
         features["sar_dist"] = (close - sar) / close
 
-    if use_dmi:
+    if p['use_dmi']:
+        period = p['dmi_period']
         up_move = high.diff()
         down_move = -low.diff()
         pdm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         mdm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
         tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-        atr = pd.Series(tr).ewm(alpha=1/dmi_period, adjust=False).mean()
-        pdm_smooth = pd.Series(pdm).ewm(alpha=1/dmi_period, adjust=False).mean()
-        mdm_smooth = pd.Series(mdm).ewm(alpha=1/dmi_period, adjust=False).mean()
+        atr = pd.Series(tr).ewm(alpha=1/period, adjust=False).mean()
+        pdm_smooth = pd.Series(pdm).ewm(alpha=1/period, adjust=False).mean()
+        mdm_smooth = pd.Series(mdm).ewm(alpha=1/period, adjust=False).mean()
         pdi = 100 * pdm_smooth / atr
         mdi = 100 * mdm_smooth / atr
         dx = (abs(pdi - mdi) / (pdi + mdi + 1e-10)) * 100
-        adx = dx.ewm(alpha=1/dmi_period, adjust=False).mean()
+        adx = dx.ewm(alpha=1/period, adjust=False).mean()
         features["dmi_plus"] = pdi / 100.0
         features["dmi_minus"] = mdi / 100.0
         features["dmi_adx"] = adx / 100.0
         features["dmi_diff"] = (pdi - mdi) / 100.0
 
-    if use_obv:
+    if p['use_obv']:
         sign = np.sign(close.diff())
         obv = (sign * volume).cumsum()
         features["obv_change"] = obv.pct_change(5)
 
-    if use_vol:
-        vol_ma = volume.rolling(vol_period).mean()
+    if p['use_vol']:
+        period = p['vol_period']
+        vol_ma = volume.rolling(period).mean()
         features["vol_ratio"] = volume / vol_ma
 
-    if use_trend:
+    if p['use_trend']:
         ma5 = close.rolling(5).mean()
         ma20 = close.rolling(20).mean()
         features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
 
     return features
 
-# ========== 主分析按钮 ==========
+# ========== 开始分析 ==========
 if st.button("🔍 开始分析"):
     if not code:
         st.warning("请输入股票代码")
     elif data is None:
         st.warning("请先在线获取数据或上传本地文件。")
     else:
-        features = compute_all_features(data)
+        features = compute_all_features(data, params)
         combined = pd.concat([data[["date","close"]], features], axis=1).dropna()
-        # 放宽数据量要求：至少100天（大约5个月）
         if len(combined) < 100:
-            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。"
-                     f"\n数据日期范围：{data['date'].min().date()} 至 {data['date'].max().date()}，"
-                     f"分析日期：{analysis_date}。"
-                     f"\n建议选择更靠后的分析日期（如数据截止日附近），或上传更早的历史数据。")
+            st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。\n数据范围：{data['date'].min().date()} 至 {data['date'].max().date()}，分析日期：{analysis_date}。\n请选择更靠后的分析日期。")
             st.stop()
 
         target_date = pd.to_datetime(analysis_date)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
-            st.error(f"所选日期 {target_date.date()} 在数据中不存在或包含缺失值，请换一个交易日。")
+            st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
         else:
             target_idx = date_rows.index[0]
             target_close = combined.loc[target_idx, "close"]
             st.success(f"📌 {target_date.date()} 收盘价：{target_close:.2f} 元")
 
-            feature_cols = [col for col in combined.columns if col not in ["date", "close"]]
+            feature_cols = [col for col in combined.columns if col not in ["date","close"]]
             current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
 
             exclude_start = max(0, target_idx - 20)
@@ -494,14 +506,11 @@ if st.button("🔍 开始分析"):
             hist_feat = combined.loc[hist_mask, feature_cols].values
 
             if len(hist_feat) < 30:
-                st.warning("历史相似样本数较少，结果可能有偏差")
+                st.warning("相似样本较少，结果可能有偏差")
 
             scaler = StandardScaler()
             scaler.fit(hist_feat)
-            hist_feat_scaled = scaler.transform(hist_feat)
-            current_feat_scaled = scaler.transform(current_feat)
-
-            sim = cosine_similarity(current_feat_scaled, hist_feat_scaled)[0]
+            sim = cosine_similarity(scaler.transform(current_feat), scaler.transform(hist_feat))[0]
             top_k = min(30, len(sim))
             top_idx = np.argsort(sim)[-top_k:][::-1]
             hist_combined_idx = combined.loc[hist_mask].index.values
@@ -509,17 +518,14 @@ if st.button("🔍 开始分析"):
             sim_scores = sim[top_idx]
 
             with st.expander("📊 当前分析日期的技术指标数值"):
-                current_series = combined.loc[target_idx, feature_cols]
-                current_df = pd.DataFrame({"指标": current_series.index, "数值": current_series.values})
-                st.dataframe(current_df.set_index("指标"), use_container_width=True)
+                cur_df = pd.DataFrame({"指标":feature_cols, "数值":combined.loc[target_idx, feature_cols].values})
+                st.dataframe(cur_df.set_index("指标"), use_container_width=True)
 
             with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
-                top_n_show = min(5, len(matched_indices))
-                top_match_indices = matched_indices[:top_n_show]
-                sim_indicators = combined.loc[top_match_indices, ["date"] + feature_cols].copy()
-                sim_indicators["日期"] = sim_indicators["date"].dt.date
-                sim_indicators = sim_indicators.drop(columns=["date"]).set_index("日期")
-                st.dataframe(sim_indicators, use_container_width=True)
+                top5 = matched_indices[:5]
+                sim_df = combined.loc[top5, ["date"]+feature_cols].copy()
+                sim_df["日期"] = sim_df["date"].dt.date
+                st.dataframe(sim_df.drop(columns="date").set_index("日期"), use_container_width=True)
 
             close_series = combined["close"].reset_index(drop=True)
             rets = []
@@ -534,35 +540,22 @@ if st.button("🔍 开始分析"):
                 ret_arr = np.array(rets)
                 win_rate = (ret_arr > 0).mean()
                 avg_ret = ret_arr.mean()
-                pos = ret_arr[ret_arr > 0]
-                neg = ret_arr[ret_arr < 0]
-                if len(pos) > 0 and len(neg) > 0:
-                    pl_ratio = pos.mean() / abs(neg.mean())
-                else:
-                    pl_ratio = np.inf if len(neg) == 0 else 0
-
+                pos = ret_arr[ret_arr > 0]; neg = ret_arr[ret_arr < 0]
+                pl_ratio = pos.mean() / abs(neg.mean()) if len(pos) and len(neg) else np.inf
                 col1, col2, col3 = st.columns(3)
                 col1.metric("上涨概率", f"{win_rate:.1%}")
                 col2.metric("平均收益", f"{avg_ret:.2%}")
                 col3.metric("盈亏比", f"{pl_ratio:.2f}")
-
                 if win_rate > 0.55 and avg_ret > 0:
                     st.success("✅ 概率买点信号")
                 else:
                     st.info("ℹ️ 未达到高概率买点标准")
-
-                fig = px.histogram(ret_arr, nbins=20,
-                                   title=f"相似历史持有{days_hold}天收益分布",
-                                   labels={"value": "收益率"}, opacity=0.7)
+                fig = px.histogram(ret_arr, nbins=20, title=f"相似历史持有{days_hold}天收益分布")
                 fig.add_vline(x=0, line_dash="dash", line_color="red")
                 st.plotly_chart(fig, use_container_width=True)
 
-                with st.expander("查看相似历史日期及相似度"):
+                with st.expander("相似历史日期及相似度"):
                     match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
-                    sim_df = pd.DataFrame({
-                        "历史日期": match_dates.values[:len(sim_scores)],
-                        "相似度": sim_scores
-                    })
-                    st.dataframe(sim_df.head(20))
+                    st.dataframe(pd.DataFrame({"历史日期":match_dates.values[:len(sim_scores)], "相似度":sim_scores}).head(20))
 
                 st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
