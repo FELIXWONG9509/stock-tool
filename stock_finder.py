@@ -174,7 +174,7 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['skdj_m'] = st.slider("SKDJ M", 2, 10, 3, key='skdj_m') if params['use_skdj'] else 3
 
     params['use_rsi'] = st.session_state.use_rsi
-    params['rsi_period'] = st.slider("RSI 周期", 5, 30, 14, key='rsi_period') if params['use_rsi'] else 14
+    params['rsi_period'] = st.slider("RSI 周期（默认14）", 5, 30, 14, key='rsi_period') if params['use_rsi'] else 14
 
     params['use_wr'] = st.session_state.use_wr
     params['wr_period'] = st.slider("WR 周期", 5, 30, 14, key='wr_period') if params['use_wr'] else 14
@@ -244,7 +244,7 @@ if "data" not in st.session_state:
     st.stop()
 data = st.session_state["data"]
 
-# ========== 指标计算引擎 ==========
+# ========== 指标计算引擎（证券软件标准版） ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -252,6 +252,7 @@ def compute_all_features(df, p):
     volume = df["volume"]
     features = pd.DataFrame(index=df.index)
 
+    # KDJ (9,3,3)
     if p['use_kdj']:
         n = p['kdj_n']
         low_n = low.rolling(n).min()
@@ -260,10 +261,11 @@ def compute_all_features(df, p):
         k = rsv.ewm(alpha=1/3, adjust=False).mean()
         d = k.ewm(alpha=1/3, adjust=False).mean()
         j = 3 * k - 2 * d
-        features["kdj_k"] = k / 100.0
-        features["kdj_d"] = d / 100.0
-        features["kdj_j"] = j / 100.0
+        features["KDJ_K"] = k
+        features["KDJ_D"] = d
+        features["KDJ_J"] = j
 
+    # SKDJ
     if p['use_skdj']:
         n, m = p['skdj_n'], p['skdj_m']
         low_n = low.rolling(n).min()
@@ -273,72 +275,91 @@ def compute_all_features(df, p):
         d = k.ewm(alpha=1/3, adjust=False).mean()
         skdj_k = d.ewm(alpha=1/m, adjust=False).mean()
         skdj_d = skdj_k.ewm(alpha=1/m, adjust=False).mean()
-        features["skdj_k"] = skdj_k / 100.0
-        features["skdj_d"] = skdj_d / 100.0
-        features["skdj_kd_diff"] = (skdj_k - skdj_d) / 100.0
+        features["SKDJ_K"] = skdj_k
+        features["SKDJ_D"] = skdj_d
+        features["SKDJ_KD差"] = skdj_k - skdj_d
 
+    # RSI (6, 12, 24)
     if p['use_rsi']:
-        period = p['rsi_period']
-        delta = close.diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-        rs = avg_gain / (avg_loss + 1e-10)
-        rsi = 100 - (100 / (1 + rs))
-        features["rsi"] = rsi / 100.0
+        for period in [6, 12, 24]:
+            delta = close.diff()
+            gain = delta.clip(lower=0)
+            loss = -delta.clip(upper=0)
+            avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+            rs = avg_gain / (avg_loss + 1e-10)
+            rsi = 100 - (100 / (1 + rs))
+            features[f"RSI{period}"] = rsi
 
+    # WR (6, 10)
     if p['use_wr']:
-        period = p['wr_period']
-        high_n = high.rolling(period).max()
-        low_n = low.rolling(period).min()
-        wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
-        features["wr"] = wr / -100.0
+        for period in [6, 10]:
+            high_n = high.rolling(period).max()
+            low_n = low.rolling(period).min()
+            wr = (high_n - close) / (high_n - low_n + 1e-10) * -100
+            features[f"WR{period}"] = wr
 
+    # BIAS (6, 12, 24)
     if p['use_bias']:
-        ma = close.rolling(p['bias_period']).mean()
-        features["bias"] = (close - ma) / (ma + 1e-10)
+        for period in [6, 12, 24]:
+            ma = close.rolling(period).mean()
+            features[f"BIAS{period}"] = (close - ma) / ma * 100
 
+    # CCI
     if p['use_cci']:
+        period = p['cci_period']
         tp = (high + low + close) / 3
-        ma_tp = tp.rolling(p['cci_period']).mean()
-        mad = tp.rolling(p['cci_period']).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
+        ma_tp = tp.rolling(period).mean()
+        mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
         cci = (tp - ma_tp) / (0.015 * mad + 1e-10)
-        features["cci"] = cci.clip(-200, 200) / 200.0
+        features["CCI"] = cci
 
+    # ROC
     if p['use_roc']:
-        roc = close.pct_change(p['roc_period']) * 100
-        features["roc"] = roc / 100.0
+        period = p['roc_period']
+        roc = close.pct_change(period) * 100
+        features[f"ROC{period}"] = roc
 
+    # MA (5, 10, 20, 60)
     if p['use_ma']:
-        fast_ma = close.rolling(p['ma_fast']).mean()
-        slow_ma = close.rolling(p['ma_slow']).mean()
-        features["ma_fast_dist"] = (close - fast_ma) / (close + 1e-10)
-        features["ma_slow_dist"] = (close - slow_ma) / (close + 1e-10)
-        features["ma_cross"] = (fast_ma - slow_ma) / (close + 1e-10)
+        for period in [5, 10, 20, 60]:
+            ma_val = close.rolling(period).mean()
+            features[f"MA{period}"] = ma_val
+        for period in [5, 10, 20, 60]:
+            ma_val = close.rolling(period).mean()
+            features[f"距MA{period}"] = (close - ma_val) / close * 100
 
+    # MACD (DIF, DEA, 柱)
     if p['use_macd']:
-        ema_fast = close.ewm(span=p['macd_fast']).mean()
-        ema_slow = close.ewm(span=p['macd_slow']).mean()
-        macd_line = ema_fast - ema_slow
-        signal = macd_line.ewm(span=p['macd_signal']).mean()
-        macd_hist = macd_line - signal
-        features["macd_hist_norm"] = macd_hist / (close + 1e-10)
+        fast, slow, sig = p['macd_fast'], p['macd_slow'], p['macd_signal']
+        ema_fast = close.ewm(span=fast).mean()
+        ema_slow = close.ewm(span=slow).mean()
+        dif = ema_fast - ema_slow
+        dea = dif.ewm(span=sig).mean()
+        macd_hist = (dif - dea) * 2
+        features["MACD_DIF"] = dif
+        features["MACD_DEA"] = dea
+        features["MACD_柱"] = macd_hist
 
+    # EXPMA (12, 50)
     if p['use_expma']:
-        ema_short = close.ewm(span=p['expma_short']).mean()
-        ema_long = close.ewm(span=p['expma_long']).mean()
-        features["expma_short_dist"] = (close - ema_short) / (close + 1e-10)
-        features["expma_long_dist"] = (close - ema_long) / (close + 1e-10)
-        features["expma_diff"] = (ema_short - ema_long) / (close + 1e-10)
+        for period in [12, 50]:
+            ema_val = close.ewm(span=period).mean()
+            features[f"EXPMA{period}"] = ema_val
 
+    # BOLL (上轨, 中轨, 下轨, 位置)
     if p['use_boll']:
-        mid = close.rolling(p['bb_period']).mean()
-        std = close.rolling(p['bb_period']).std()
-        upper = mid + p['bb_std'] * std
-        lower = mid - p['bb_std'] * std
-        features["bb_position"] = (close - lower) / (upper - lower + 1e-10)
+        period, std_mult = p['bb_period'], p['bb_std']
+        mid = close.rolling(period).mean()
+        std = close.rolling(period).std()
+        upper = mid + std_mult * std
+        lower = mid - std_mult * std
+        features["BOLL上轨"] = upper
+        features["BOLL中轨"] = mid
+        features["BOLL下轨"] = lower
+        features["BOLL位置"] = (close - lower) / (upper - lower + 1e-10)
 
+    # SAR
     if p['use_sar']:
         af, max_af = 0.02, 0.2
         sar = np.zeros(len(close))
@@ -373,8 +394,9 @@ def compute_all_features(df, p):
                         af = min(af + 0.02, max_af)
                     else:
                         ep[i] = ep[i-1]
-        features["sar_dist"] = (close - sar) / (close + 1e-10)
+        features["SAR"] = sar
 
+    # DMI (PDI, MDI, ADX)
     if p['use_dmi']:
         period = p['dmi_period']
         up_move = high.diff()
@@ -389,24 +411,29 @@ def compute_all_features(df, p):
         mdi = 100 * mdm_s / (atr + 1e-10)
         dx = np.abs(pdi - mdi) / (pdi + mdi + 1e-10) * 100
         adx = dx.ewm(alpha=1/period, adjust=False).mean()
-        features["dmi_plus"] = pdi / 100.0
-        features["dmi_minus"] = mdi / 100.0
-        features["dmi_adx"] = adx / 100.0
-        features["dmi_diff"] = (pdi - mdi) / 100.0
+        features["DMI_PDI"] = pdi
+        features["DMI_MDI"] = mdi
+        features["DMI_ADX"] = adx
 
+    # OBV
     if p['use_obv']:
         sign = np.sign(close.diff())
         obv = (sign * volume).cumsum()
-        features["obv_change"] = obv.pct_change(5)
+        features["OBV"] = obv
 
+    # VOL (成交量 + 量比)
     if p['use_vol']:
-        vol_ma = volume.rolling(p['vol_period']).mean()
-        features["vol_ratio"] = volume / vol_ma
+        vol_ma5 = volume.rolling(5).mean()
+        vol_ma10 = volume.rolling(10).mean()
+        features["成交量"] = volume
+        features["量比"] = volume / vol_ma5
+        features["量比10"] = volume / vol_ma10
 
+    # 趋势强度
     if p['use_trend']:
         ma5 = close.rolling(5).mean()
         ma20 = close.rolling(20).mean()
-        features["trend_strength"] = (ma5 - ma20) / (close + 1e-10)
+        features["趋势强度"] = (ma5 - ma20) / close * 100
 
     features = features.ffill().bfill().fillna(0)
     return features
@@ -475,7 +502,6 @@ if st.button("🔍 开始分析"):
                 sim_df = combined.loc[top5, ["date"]+feature_cols].copy()
                 sim_df["日期"] = sim_df["date"].dt.date
                 sim_df = sim_df.drop(columns="date").set_index("日期")
-                # 将英文列名替换为可读的形式
                 sim_df.index.name = "历史日期"
                 st.dataframe(sim_df, use_container_width=True)
 
@@ -503,7 +529,7 @@ if st.button("🔍 开始分析"):
                 else:
                     st.info("ℹ️ 未达到高概率买点标准")
 
-                # ---------- 全中文图表 ----------
+                # 全中文图表
                 fig = px.histogram(
                     ret_arr,
                     nbins=20,
