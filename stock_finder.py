@@ -133,13 +133,10 @@ with col3:
                        index=min(st.session_state.analysis_day, max_day)-1)
 with col_today:
     st.markdown("### ")
-    # 不执行任何操作，仅显示提示
     st.button("📌 今天", help="如需分析今天，请将上方年、月、日手动选为今天的日期")
 
-# 提示今天日期，引导手动选择
 st.info(f"📅 今天是 **{today_str}**，请在上方下拉框中手动选为 {today_date.year} 年 {today_date.month} 月 {today_date.day} 日。")
 
-# 将下拉框的当前选择同步回 session_state
 st.session_state.analysis_year = year
 st.session_state.analysis_month = month
 st.session_state.analysis_day = day
@@ -526,25 +523,13 @@ if st.button("🔍 开始分析"):
             hist_mask[exclude_start:exclude_end] = False
             hist_feat = combined.loc[hist_mask, feature_cols].values
 
-            if hist_feat.shape[1] > 0:
-                std = np.std(hist_feat, axis=0)
-                zero_var_mask = std == 0
-                if zero_var_mask.all():
-                    st.error("当前所选指标生成的特征全部为常数，无法进行相似度分析。请至少再添加一个其他指标。")
-                    st.stop()
-                elif zero_var_mask.any():
-                    feature_cols = [col for i, col in enumerate(feature_cols) if not zero_var_mask[i]]
-                    current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
-                    hist_feat = combined.loc[hist_mask, feature_cols].values
-
-            if len(hist_feat) < 30 or hist_feat.shape[1] == 0:
-                st.error("可用于分析的特征列不足，请尝试选择更多指标或调整参数。")
-                st.stop()
+            if len(hist_feat) < 30:
+                st.warning("相似样本较少，结果可能有偏差")
 
             scaler = StandardScaler()
             scaler.fit(hist_feat)
             sim = cosine_similarity(scaler.transform(current_feat), scaler.transform(hist_feat))[0]
-            top_k = min(30, len(sim))
+            top_k = min(100, len(sim))  # 扩大搜索范围，以便找到更多近10年的样本
             top_idx = np.argsort(sim)[-top_k:][::-1]
             hist_combined_idx = combined.loc[hist_mask].index.values
             matched_indices = hist_combined_idx[top_idx]
@@ -554,13 +539,19 @@ if st.button("🔍 开始分析"):
                 cur_df = pd.DataFrame({"指标名称": feature_cols, "当前数值": combined.loc[target_idx, feature_cols].values})
                 st.dataframe(cur_df.set_index("指标名称"), use_container_width=True)
 
-            with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
-                top5 = matched_indices[:5]
-                sim_df = combined.loc[top5, ["date"]+feature_cols].copy()
-                sim_df["日期"] = sim_df["date"].dt.date
-                sim_df = sim_df.drop(columns="date").set_index("日期")
-                sim_df.index.name = "历史日期"
-                st.dataframe(sim_df, use_container_width=True)
+            # ---------- 修改点：展示近10年的相似历史，并包含收盘价 ----------
+            with st.expander("📊 近10年相似历史日期的技术指标数值"):
+                ten_years_ago = selected_date - timedelta(days=10*365)
+                # 筛选日期在近10年内的相似索引
+                recent_indices = [idx for idx in matched_indices if combined.loc[idx, "date"] >= ten_years_ago]
+                if recent_indices:
+                    recent_df = combined.loc[recent_indices, ["date", "close"] + feature_cols].copy()
+                    recent_df["日期"] = recent_df["date"].dt.date
+                    recent_df = recent_df.drop(columns="date").set_index("日期")
+                    recent_df.index.name = "历史日期"
+                    st.dataframe(recent_df, use_container_width=True)
+                else:
+                    st.info("近10年内没有找到相似的历史交易日。")
 
             close_series = combined["close"].reset_index(drop=True)
             rets = []
