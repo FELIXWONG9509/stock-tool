@@ -11,7 +11,7 @@ import re
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 
-# 修复日期选择器星期乱码
+# 修复日期选择器星期乱码（保留）
 st.markdown("""
     <style>
     input[type="date"] {
@@ -116,21 +116,29 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 日期选择 + 一键今天（终极可靠版）----------
+# ---------- 日期选择 + 中文显示 + 一键今天 ----------
+# 中文星期映射（0=周一 ... 6=周日）
+weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
+
 col_date, col_today = st.columns([4, 1])
 with col_date:
-    # 通过动态 key 强制组件重建
     date_key = f"date_input_{st.session_state.date_reset_counter}"
     new_date = st.date_input(
         "📅 分析日期",
         value=st.session_state.analysis_date_value,
         key=date_key
     )
-    # 用户手动更改时同步到 session_state
+    # 同步到 session_state
     if new_date != st.session_state.analysis_date_value:
         st.session_state.analysis_date_value = new_date
-        st.session_state.date_reset_counter += 1  # 同步后也更新 key，保持干净
+        st.session_state.date_reset_counter += 1
         st.rerun()
+
+    # 显示中文日期信息
+    d = st.session_state.analysis_date_value
+    chinese_date_str = f"{d.year}年{d.month}月{d.day}日 星期{weekday_cn[d.weekday()]}"
+    st.caption(f"📌 当前选择：{chinese_date_str}")
+
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
