@@ -109,7 +109,7 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 中文日期选择（手动选今天，绝对稳定） ----------
+# ---------- 中文日期选择 ----------
 current_year = date.today().year
 year_options = list(range(current_year - 30, current_year + 1))
 month_names = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
@@ -529,7 +529,7 @@ if st.button("🔍 开始分析"):
             scaler = StandardScaler()
             scaler.fit(hist_feat)
             sim = cosine_similarity(scaler.transform(current_feat), scaler.transform(hist_feat))[0]
-            top_k = min(100, len(sim))  # 扩大搜索范围，以便找到更多近10年的样本
+            top_k = min(100, len(sim))
             top_idx = np.argsort(sim)[-top_k:][::-1]
             hist_combined_idx = combined.loc[hist_mask].index.values
             matched_indices = hist_combined_idx[top_idx]
@@ -539,10 +539,10 @@ if st.button("🔍 开始分析"):
                 cur_df = pd.DataFrame({"指标名称": feature_cols, "当前数值": combined.loc[target_idx, feature_cols].values})
                 st.dataframe(cur_df.set_index("指标名称"), use_container_width=True)
 
-            # ---------- 修改点：展示近10年的相似历史，并包含收盘价 ----------
+            # ---------- 近10年相似历史 + 收盘价 ----------
             with st.expander("📊 近10年相似历史日期的技术指标数值"):
-                ten_years_ago = selected_date - timedelta(days=10*365)
-                # 筛选日期在近10年内的相似索引
+                ten_years_ago = pd.Timestamp(selected_date) - pd.Timedelta(days=10*365)
+                # 确保比较的日期列类型一致
                 recent_indices = [idx for idx in matched_indices if combined.loc[idx, "date"] >= ten_years_ago]
                 if recent_indices:
                     recent_df = combined.loc[recent_indices, ["date", "close"] + feature_cols].copy()
