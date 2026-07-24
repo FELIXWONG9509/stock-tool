@@ -109,14 +109,13 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 中文日期选择（年/月/日下拉框，不刷新，保留指标） ----------
+# ---------- 中文日期选择（下拉框 + 完美今天按钮） ----------
 current_year = date.today().year
 year_options = list(range(current_year - 30, current_year + 1))
 month_names = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
 month_values = list(range(1, 13))
 weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 下拉框不使用动态 key，以便保持指标状态
 col1, col2, col3, col_today = st.columns([2, 2, 2, 1])
 with col1:
     year = st.selectbox("年", year_options,
@@ -135,8 +134,7 @@ with col_today:
         st.session_state.analysis_year = date.today().year
         st.session_state.analysis_month = date.today().month
         st.session_state.analysis_day = date.today().day
-        st.success("✅ 日期已更新为今天！请点击“开始分析”或切换持仓周期即可刷新显示。")
-        # 关键：不调用 st.rerun()
+        st.rerun()
 
 # 将下拉框的当前选择同步回 session_state（用户手动更改时也生效）
 st.session_state.analysis_year = year
@@ -148,7 +146,7 @@ st.caption(f"📌 当前选择：{year}年{month}月{day}日 星期{weekday_cn[s
 
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 侧边栏 ==========
+# ========== 侧边栏（所有指标 key 固定，点击“今天”也不会丢失） ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
