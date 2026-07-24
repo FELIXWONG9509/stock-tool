@@ -5,21 +5,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 from datetime import datetime, timedelta, date
+import calendar
 import io
 import json
 import re
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
-
-# 修复日期选择器星期乱码（保留）
-st.markdown("""
-    <style>
-    input[type="date"] {
-        font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 def extract_code_from_filename(filename):
@@ -32,11 +23,13 @@ def extract_code_from_filename(filename):
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
 
-# ---------- 初始化状态 ----------
-if 'analysis_date_value' not in st.session_state:
-    st.session_state.analysis_date_value = date.today()
-if 'date_reset_counter' not in st.session_state:
-    st.session_state.date_reset_counter = 0
+# ---------- 初始化日期状态 ----------
+if 'analysis_year' not in st.session_state:
+    st.session_state.analysis_year = date.today().year
+if 'analysis_month' not in st.session_state:
+    st.session_state.analysis_month = date.today().month
+if 'analysis_day' not in st.session_state:
+    st.session_state.analysis_day = date.today().day
 
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
@@ -116,39 +109,47 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 日期选择 + 中文显示 + 一键今天 ----------
-# 中文星期映射（0=周一 ... 6=周日）
+# ---------- 中文日期选择（年/月/日下拉框） ----------
+# 年份范围：当前年份向前推30年
+current_year = date.today().year
+year_options = list(range(current_year - 30, current_year + 1))
+
+# 月份中文名
+month_names = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
+month_values = list(range(1, 13))
+
+# 星期中文名
 weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
 
-col_date, col_today = st.columns([4, 1])
-with col_date:
-    date_key = f"date_input_{st.session_state.date_reset_counter}"
-    new_date = st.date_input(
-        "📅 分析日期",
-        value=st.session_state.analysis_date_value,
-        key=date_key
-    )
-    # 同步到 session_state
-    if new_date != st.session_state.analysis_date_value:
-        st.session_state.analysis_date_value = new_date
-        st.session_state.date_reset_counter += 1
-        st.rerun()
-
-    # 显示中文日期信息
-    d = st.session_state.analysis_date_value
-    chinese_date_str = f"{d.year}年{d.month}月{d.day}日 星期{weekday_cn[d.weekday()]}"
-    st.caption(f"📌 当前选择：{chinese_date_str}")
-
+col1, col2, col3, col_today = st.columns([2, 2, 2, 1])
+with col1:
+    year = st.selectbox("年", year_options, index=year_options.index(st.session_state.analysis_year) if st.session_state.analysis_year in year_options else 0)
+with col2:
+    month = st.selectbox("月", month_values, format_func=lambda m: month_names[m-1], index=month_values.index(st.session_state.analysis_month) if st.session_state.analysis_month in month_values else 0)
+with col3:
+    # 根据年月计算当月最大天数
+    max_day = calendar.monthrange(year, month)[1]
+    day = st.selectbox("日", range(1, max_day+1), index=min(st.session_state.analysis_day, max_day)-1)
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
-        st.session_state.analysis_date_value = date.today()
-        st.session_state.date_reset_counter += 1
+        st.session_state.analysis_year = current_year
+        st.session_state.analysis_month = date.today().month
+        st.session_state.analysis_day = date.today().day
         st.rerun()
+
+# 更新 session_state
+st.session_state.analysis_year = year
+st.session_state.analysis_month = month
+st.session_state.analysis_day = day
+
+# 显示完整中文日期
+selected_date = date(year, month, day)
+st.caption(f"📌 当前选择：{year}年{month}月{day}日 星期{weekday_cn[selected_date.weekday()]}")
 
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 侧边栏 ==========
+# ========== 侧边栏（不变） ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
@@ -507,7 +508,7 @@ if st.button("🔍 开始分析"):
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
-        target_date = pd.to_datetime(st.session_state.analysis_date_value)
+        target_date = pd.to_datetime(selected_date)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
             st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
