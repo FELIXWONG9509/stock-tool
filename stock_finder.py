@@ -30,8 +30,6 @@ if 'analysis_month' not in st.session_state:
     st.session_state.analysis_month = date.today().month
 if 'analysis_day' not in st.session_state:
     st.session_state.analysis_day = date.today().day
-if 'date_reset_counter' not in st.session_state:
-    st.session_state.date_reset_counter = 0
 
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
@@ -111,40 +109,36 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 中文日期选择（完美版：今天按钮既刷新又保留指标） ----------
+# ---------- 中文日期选择（年/月/日下拉框，不刷新，保留指标） ----------
 current_year = date.today().year
 year_options = list(range(current_year - 30, current_year + 1))
 month_names = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
 month_values = list(range(1, 13))
 weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
 
-cnt = st.session_state.date_reset_counter  # 用于动态刷新下拉框
-
+# 下拉框不使用动态 key，以便保持指标状态
 col1, col2, col3, col_today = st.columns([2, 2, 2, 1])
 with col1:
     year = st.selectbox("年", year_options,
-                        index=year_options.index(st.session_state.analysis_year) if st.session_state.analysis_year in year_options else 0,
-                        key=f"year_{cnt}")
+                        index=year_options.index(st.session_state.analysis_year) if st.session_state.analysis_year in year_options else 0)
 with col2:
     month = st.selectbox("月", month_values,
                          format_func=lambda m: month_names[m-1],
-                         index=month_values.index(st.session_state.analysis_month) if st.session_state.analysis_month in month_values else 0,
-                         key=f"month_{cnt}")
+                         index=month_values.index(st.session_state.analysis_month) if st.session_state.analysis_month in month_values else 0)
 with col3:
     max_day = calendar.monthrange(year, month)[1]
     day = st.selectbox("日", range(1, max_day+1),
-                       index=min(st.session_state.analysis_day, max_day)-1,
-                       key=f"day_{cnt}")
+                       index=min(st.session_state.analysis_day, max_day)-1)
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
         st.session_state.analysis_year = date.today().year
         st.session_state.analysis_month = date.today().month
         st.session_state.analysis_day = date.today().day
-        st.session_state.date_reset_counter += 1
-        st.rerun()
+        st.success("✅ 日期已更新为今天！请点击“开始分析”或切换持仓周期即可刷新显示。")
+        # 关键：不调用 st.rerun()
 
-# 将下拉框的当前选择同步回 session_state
+# 将下拉框的当前选择同步回 session_state（用户手动更改时也生效）
 st.session_state.analysis_year = year
 st.session_state.analysis_month = month
 st.session_state.analysis_day = day
