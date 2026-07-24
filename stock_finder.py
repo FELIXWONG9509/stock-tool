@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 from datetime import datetime, timedelta, date
@@ -528,27 +528,33 @@ if st.button("🔍 开始分析"):
 
             scaler = StandardScaler()
             scaler.fit(hist_feat)
-            sim = cosine_similarity(scaler.transform(current_feat), scaler.transform(hist_feat))[0]
-            top_k = min(100, len(sim))
-            top_idx = np.argsort(sim)[-top_k:][::-1]
+            current_feat_scaled = scaler.transform(current_feat)
+            hist_feat_scaled = scaler.transform(hist_feat)
+
+            # 使用欧氏距离
+            distances = euclidean_distances(current_feat_scaled, hist_feat_scaled)[0]
+            top_k = min(100, len(distances))
+            top_idx = np.argsort(distances)[:top_k]  # 距离最小的前100
             hist_combined_idx = combined.loc[hist_mask].index.values
             matched_indices = hist_combined_idx[top_idx]
-            sim_scores = sim[top_idx]
+            matched_distances = distances[top_idx]
 
             with st.expander("📊 当前分析日期的技术指标数值"):
                 cur_df = pd.DataFrame({"指标名称": feature_cols, "当前数值": combined.loc[target_idx, feature_cols].values})
                 st.dataframe(cur_df.set_index("指标名称"), use_container_width=True)
 
-            # ---------- 近10年相似历史 + 收盘价 ----------
-            with st.expander("📊 近10年相似历史日期的技术指标数值"):
+            with st.expander("📊 近10年相似历史日期的技术指标数值（按距离排序）"):
                 ten_years_ago = pd.Timestamp(selected_date) - pd.Timedelta(days=10*365)
-                # 确保比较的日期列类型一致
                 recent_indices = [idx for idx in matched_indices if combined.loc[idx, "date"] >= ten_years_ago]
                 if recent_indices:
                     recent_df = combined.loc[recent_indices, ["date", "close"] + feature_cols].copy()
+                    recent_df.rename(columns={"close": "收盘价"}, inplace=True)
                     recent_df["日期"] = recent_df["date"].dt.date
                     recent_df = recent_df.drop(columns="date").set_index("日期")
                     recent_df.index.name = "历史日期"
+                    # 添加距离列
+                    recent_idx_in_matched = [list(matched_indices).index(i) for i in recent_indices]
+                    recent_df["距离"] = [matched_distances[i] for i in recent_idx_in_matched]
                     st.dataframe(recent_df, use_container_width=True)
                 else:
                     st.info("近10年内没有找到相似的历史交易日。")
@@ -592,8 +598,9 @@ if st.button("🔍 开始分析"):
                 fig.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="零收益线")
                 st.plotly_chart(fig, use_container_width=True)
 
-                with st.expander("相似历史日期及相似度"):
+                with st.expander("相似历史日期及距离"):
                     match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
-                    st.dataframe(pd.DataFrame({"历史日期": match_dates.values[:len(sim_scores)], "相似度": sim_scores}).head(20))
+                    dist_df = pd.DataFrame({"历史日期": match_dates.values[:len(matched_distances)], "距离": matched_distances})
+                    st.dataframe(dist_df.head(20))
 
                 st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
