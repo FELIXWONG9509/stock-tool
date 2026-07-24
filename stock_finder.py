@@ -32,9 +32,9 @@ def extract_code_from_filename(filename):
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
 
-# ---------- 初始化分析日期 ----------
-if 'analysis_date' not in st.session_state:
-    st.session_state.analysis_date = date.today()
+# ---------- 初始化日期（独立变量，避免冲突） ----------
+if 'selected_date' not in st.session_state:
+    st.session_state.selected_date = date.today()
 
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
@@ -114,19 +114,15 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 日期选择 + 一键今天（已修复） ----------
+# ---------- 日期选择 + 一键今天（彻底稳定版） ----------
 col_date, col_today = st.columns([4, 1])
 with col_date:
-    analysis_date = st.date_input(
-        "📅 分析日期",
-        value=st.session_state.analysis_date  # 直接绑定 session_state
-    )
-    # 将用户手动选择的日期同步回 session_state
-    st.session_state.analysis_date = analysis_date
+    # 直接通过 key 绑定到 selected_date，无需手动同步
+    st.date_input("📅 分析日期", key="selected_date")
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
-        st.session_state.analysis_date = date.today()
+        st.session_state.selected_date = date.today()
         st.rerun()
 
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
@@ -490,7 +486,7 @@ if st.button("🔍 开始分析"):
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
-        target_date = pd.to_datetime(st.session_state.analysis_date)
+        target_date = pd.to_datetime(st.session_state.selected_date)  # 使用新的变量名
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
             st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
