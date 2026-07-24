@@ -122,8 +122,9 @@ for name, info in FIXED_COMBOS.items():
         combo_options.append(display_name)
         display_to_combo[display_name] = name
 
-short_keys = ['use_kdj','use_skdj','use_rsi','use_wr','use_bias','use_cci','use_roc']
-long_keys = ['use_ma','use_macd','use_expma','use_boll','use_sar','use_dmi','use_obv','use_vol','use_trend']
+# 调整后的指标分组
+short_keys = ['use_kdj','use_skdj','use_rsi','use_wr','use_bias','use_cci','use_roc','use_trend']          # 加入短期趋势强度
+long_keys = ['use_ma','use_macd','use_expma','use_boll','use_sar','use_dmi','use_obv','use_vol','use_trend_long']  # 加入长期趋势强度
 all_keys = short_keys + long_keys
 
 for k in all_keys:
@@ -164,8 +165,10 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
+# ========== 参数调整（分短线、长线） ==========
 params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
+    # 短线指标参数
     params['use_kdj'] = st.session_state.use_kdj
     params['kdj_n'] = st.slider("KDJ 周期", 5, 30, 9, key='kdj_n') if params['use_kdj'] else 9
 
@@ -188,6 +191,17 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_roc'] = st.session_state.use_roc
     params['roc_period'] = st.slider("ROC 周期", 5, 30, 12, key='roc_period') if params['use_roc'] else 12
 
+    # 短期趋势强度 (5日/20日)
+    params['use_trend'] = st.session_state.use_trend
+    if params['use_trend']:
+        st.markdown("**📈 短期趋势强度**")
+        params['trend_fast'] = st.slider("短期快线周期", 2, 30, 5, key='trend_fast')
+        params['trend_slow'] = st.slider("短期慢线周期", 5, 60, 20, key='trend_slow')
+    else:
+        params['trend_fast'] = 5
+        params['trend_slow'] = 20
+
+    # 长线指标参数
     params['use_ma'] = st.session_state.use_ma
     params['ma_fast'] = st.slider("MA 快线周期", 2, 30, 5, key='ma_fast') if params['use_ma'] else 5
     params['ma_slow'] = st.slider("MA 慢线周期", 5, 120, 20, key='ma_slow') if params['use_ma'] else 20
@@ -213,8 +227,18 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
 
     params['use_sar'] = st.session_state.use_sar
     params['use_obv'] = st.session_state.use_obv
-    params['use_trend'] = st.session_state.use_trend
 
+    # 长期趋势强度 (20日/60日)
+    params['use_trend_long'] = st.session_state.use_trend_long
+    if params['use_trend_long']:
+        st.markdown("**📉 长期趋势强度**")
+        params['trend_long_fast'] = st.slider("长期快线周期", 5, 60, 20, key='trend_long_fast')
+        params['trend_long_slow'] = st.slider("长期慢线周期", 10, 120, 60, key='trend_long_slow')
+    else:
+        params['trend_long_fast'] = 20
+        params['trend_long_slow'] = 60
+
+# ========== 指标勾选区 ==========
 with st.sidebar.expander("⚡ 短线指标", expanded=True):
     use_kdj = st.checkbox("KDJ", key='use_kdj'); st.caption("超买超卖")
     use_skdj = st.checkbox("SKDJ", key='use_skdj'); st.caption("慢速KDJ")
@@ -223,6 +247,7 @@ with st.sidebar.expander("⚡ 短线指标", expanded=True):
     use_bias = st.checkbox("BIAS", key='use_bias'); st.caption("乖离率")
     use_cci = st.checkbox("CCI", key='use_cci'); st.caption("商品通道指数")
     use_roc = st.checkbox("ROC", key='use_roc'); st.caption("变动速率")
+    use_trend = st.checkbox("短期趋势强度", key='use_trend'); st.caption("短均线排列强度")
 
 with st.sidebar.expander("📊 长线指标", expanded=True):
     use_ma = st.checkbox("MA", key='use_ma'); st.caption("均线排列")
@@ -233,7 +258,7 @@ with st.sidebar.expander("📊 长线指标", expanded=True):
     use_dmi = st.checkbox("DMI", key='use_dmi'); st.caption("趋向指标")
     use_obv = st.checkbox("OBV", key='use_obv'); st.caption("能量潮")
     use_vol = st.checkbox("量比", key='use_vol'); st.caption("放量缩量")
-    use_trend = st.checkbox("短期趋势强度", key='use_trend'); st.caption("5日/20日")
+    use_trend_long = st.checkbox("长期趋势强度", key='use_trend_long'); st.caption("长均线排列强度")
 
 if not any([st.session_state[k] for k in all_keys]):
     st.error("请在左侧至少选择一个技术指标！")
@@ -244,7 +269,7 @@ if "data" not in st.session_state:
     st.stop()
 data = st.session_state["data"]
 
-# ========== 指标计算引擎（证券软件标准版） ==========
+# ========== 指标计算引擎 ==========
 def compute_all_features(df, p):
     close = df["close"]
     high = df["high"]
@@ -252,7 +277,7 @@ def compute_all_features(df, p):
     volume = df["volume"]
     features = pd.DataFrame(index=df.index)
 
-    # KDJ (9,3,3)
+    # KDJ
     if p['use_kdj']:
         n = p['kdj_n']
         low_n = low.rolling(n).min()
@@ -320,6 +345,22 @@ def compute_all_features(df, p):
         roc = close.pct_change(period) * 100
         features[f"ROC{period}"] = roc
 
+    # 短期趋势强度
+    if p['use_trend']:
+        fast = p['trend_fast']
+        slow = p['trend_slow']
+        ma_fast = close.rolling(fast).mean()
+        ma_slow = close.rolling(slow).mean()
+        features["短期趋势强度"] = (ma_fast - ma_slow) / close * 100
+
+    # 长期趋势强度
+    if p['use_trend_long']:
+        fast = p['trend_long_fast']
+        slow = p['trend_long_slow']
+        ma_fast = close.rolling(fast).mean()
+        ma_slow = close.rolling(slow).mean()
+        features["长期趋势强度"] = (ma_fast - ma_slow) / close * 100
+
     # MA (5, 10, 20, 60)
     if p['use_ma']:
         for period in [5, 10, 20, 60]:
@@ -329,7 +370,7 @@ def compute_all_features(df, p):
             ma_val = close.rolling(period).mean()
             features[f"距MA{period}"] = (close - ma_val) / close * 100
 
-    # MACD (DIF, DEA, 柱)
+    # MACD
     if p['use_macd']:
         fast, slow, sig = p['macd_fast'], p['macd_slow'], p['macd_signal']
         ema_fast = close.ewm(span=fast).mean()
@@ -347,7 +388,7 @@ def compute_all_features(df, p):
             ema_val = close.ewm(span=period).mean()
             features[f"EXPMA{period}"] = ema_val
 
-    # BOLL (上轨, 中轨, 下轨, 位置)
+    # BOLL
     if p['use_boll']:
         period, std_mult = p['bb_period'], p['bb_std']
         mid = close.rolling(period).mean()
@@ -396,7 +437,7 @@ def compute_all_features(df, p):
                         ep[i] = ep[i-1]
         features["SAR"] = sar
 
-    # DMI (PDI, MDI, ADX)
+    # DMI
     if p['use_dmi']:
         period = p['dmi_period']
         up_move = high.diff()
@@ -421,19 +462,13 @@ def compute_all_features(df, p):
         obv = (sign * volume).cumsum()
         features["OBV"] = obv
 
-    # VOL (成交量 + 量比)
+    # VOL
     if p['use_vol']:
         vol_ma5 = volume.rolling(5).mean()
         vol_ma10 = volume.rolling(10).mean()
         features["成交量"] = volume
         features["量比"] = volume / vol_ma5
         features["量比10"] = volume / vol_ma10
-
-    # 趋势强度
-    if p['use_trend']:
-        ma5 = close.rolling(5).mean()
-        ma20 = close.rolling(20).mean()
-        features["趋势强度"] = (ma5 - ma20) / close * 100
 
     features = features.ffill().bfill().fillna(0)
     return features
@@ -529,7 +564,6 @@ if st.button("🔍 开始分析"):
                 else:
                     st.info("ℹ️ 未达到高概率买点标准")
 
-                # 全中文图表
                 fig = px.histogram(
                     ret_arr,
                     nbins=20,
