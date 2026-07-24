@@ -11,7 +11,7 @@ import re
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 
-# 修复星期乱码
+# 修复日期选择器星期乱码
 st.markdown("""
     <style>
     input[type="date"] {
@@ -32,9 +32,11 @@ def extract_code_from_filename(filename):
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
 
-# ---------- 使用一个独立的 session_state 变量存储日期，不与任何 widget key 同名 ----------
+# ---------- 初始化状态 ----------
 if 'analysis_date_value' not in st.session_state:
     st.session_state.analysis_date_value = date.today()
+if 'date_reset_counter' not in st.session_state:
+    st.session_state.date_reset_counter = 0
 
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
@@ -114,26 +116,31 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 日期选择 + 一键今天（无冲突版） ----------
+# ---------- 日期选择 + 一键今天（终极可靠版）----------
 col_date, col_today = st.columns([4, 1])
 with col_date:
-    # 关键：不设置 key，直接用 value 绑定，避免组件与手动赋值冲突
+    # 通过动态 key 强制组件重建
+    date_key = f"date_input_{st.session_state.date_reset_counter}"
     new_date = st.date_input(
         "📅 分析日期",
-        value=st.session_state.analysis_date_value
+        value=st.session_state.analysis_date_value,
+        key=date_key
     )
-    # 将用户手动选择的日期同步回 session_state（但不会引起冲突）
-    st.session_state.analysis_date_value = new_date
+    # 用户手动更改时同步到 session_state
+    if new_date != st.session_state.analysis_date_value:
+        st.session_state.analysis_date_value = new_date
+        st.session_state.date_reset_counter += 1  # 同步后也更新 key，保持干净
+        st.rerun()
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
-        # 直接修改这个专用的 session_state 变量
         st.session_state.analysis_date_value = date.today()
+        st.session_state.date_reset_counter += 1
         st.rerun()
 
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 侧边栏（无变化） ==========
+# ========== 侧边栏 ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
@@ -492,7 +499,6 @@ if st.button("🔍 开始分析"):
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
-        # 使用稳定的 analysis_date_value
         target_date = pd.to_datetime(st.session_state.analysis_date_value)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
