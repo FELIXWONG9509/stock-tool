@@ -11,7 +11,7 @@ import re
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 
-# 修复日期选择器星期乱码（强制中文字体）
+# 修复日期选择器星期乱码
 st.markdown("""
     <style>
     input[type="date"] {
@@ -114,13 +114,15 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 日期选择 + 一键今天 ----------
+# ---------- 日期选择 + 一键今天（已修复） ----------
 col_date, col_today = st.columns([4, 1])
 with col_date:
     analysis_date = st.date_input(
         "📅 分析日期",
-        key="analysis_date"  # 直接绑定到 session_state
+        value=st.session_state.analysis_date  # 直接绑定 session_state
     )
+    # 将用户手动选择的日期同步回 session_state
+    st.session_state.analysis_date = analysis_date
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
@@ -129,7 +131,7 @@ with col_today:
 
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 侧边栏 ==========
+# ========== 侧边栏（完全不变） ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
@@ -190,7 +192,6 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
-# ========== 参数调整 ==========
 params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_kdj'] = st.session_state.use_kdj
@@ -259,7 +260,6 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
         params['trend_long_fast'] = 20
         params['trend_long_slow'] = 60
 
-# ========== 指标勾选区（带简短说明） ==========
 with st.sidebar.expander("⚡ 短线指标", expanded=True):
     use_kdj = st.checkbox("KDJ", key='use_kdj'); st.caption("K/D/J三线，判断超买超卖与金叉死叉")
     use_skdj = st.checkbox("SKDJ", key='use_skdj'); st.caption("慢速KDJ，信号更稳定，适合波段")
@@ -490,7 +490,7 @@ if st.button("🔍 开始分析"):
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
-        target_date = pd.to_datetime(st.session_state.analysis_date)  # 使用 session 中的日期
+        target_date = pd.to_datetime(st.session_state.analysis_date)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
             st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
