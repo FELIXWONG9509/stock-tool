@@ -10,6 +10,16 @@ import json
 import re
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
+
+# 修复日期选择器星期乱码（强制中文字体）
+st.markdown("""
+    <style>
+    input[type="date"] {
+        font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.caption("选择经典组合或自由搭配，指定分析日期，寻找历史上最相似的时刻，计算后续上涨概率。")
 
 def extract_code_from_filename(filename):
@@ -109,9 +119,8 @@ col_date, col_today = st.columns([4, 1])
 with col_date:
     analysis_date = st.date_input(
         "📅 分析日期",
-        value=st.session_state.analysis_date
+        key="analysis_date"  # 直接绑定到 session_state
     )
-    st.session_state.analysis_date = analysis_date
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
@@ -481,7 +490,7 @@ if st.button("🔍 开始分析"):
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
-        target_date = pd.to_datetime(analysis_date)
+        target_date = pd.to_datetime(st.session_state.analysis_date)  # 使用 session 中的日期
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
             st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
