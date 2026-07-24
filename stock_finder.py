@@ -104,15 +104,13 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 日期选择（汉化 + 一键今天） ----------
+# ---------- 日期选择 + 一键今天 ----------
 col_date, col_today = st.columns([4, 1])
 with col_date:
     analysis_date = st.date_input(
         "📅 分析日期",
-        value=st.session_state.analysis_date,
-        locale="zh-CN"  # 汉化月份和星期
+        value=st.session_state.analysis_date
     )
-    # 同步到 session_state
     st.session_state.analysis_date = analysis_date
 with col_today:
     st.markdown("### ")
