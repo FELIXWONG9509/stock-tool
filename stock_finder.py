@@ -22,6 +22,10 @@ def extract_code_from_filename(filename):
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
 
+# ---------- 初始化分析日期 ----------
+if 'analysis_date' not in st.session_state:
+    st.session_state.analysis_date = date.today()
+
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
 code = st.text_input("股票代码", value=default_code)
@@ -100,7 +104,22 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-analysis_date = st.date_input("📅 分析日期（默认今天）", date.today())
+# ---------- 日期选择（汉化 + 一键今天） ----------
+col_date, col_today = st.columns([4, 1])
+with col_date:
+    analysis_date = st.date_input(
+        "📅 分析日期",
+        value=st.session_state.analysis_date,
+        locale="zh-CN"  # 汉化月份和星期
+    )
+    # 同步到 session_state
+    st.session_state.analysis_date = analysis_date
+with col_today:
+    st.markdown("### ")
+    if st.button("📌 今天"):
+        st.session_state.analysis_date = date.today()
+        st.rerun()
+
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
 # ========== 侧边栏 ==========
