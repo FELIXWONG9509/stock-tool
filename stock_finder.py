@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 from datetime import datetime, timedelta, date
-import calendar
 import io
 import json
 import re
@@ -22,14 +21,6 @@ def extract_code_from_filename(filename):
         code = match.group(1)
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
-
-# ---------- 初始化日期状态 ----------
-if 'analysis_year' not in st.session_state:
-    st.session_state.analysis_year = date.today().year
-if 'analysis_month' not in st.session_state:
-    st.session_state.analysis_month = date.today().month
-if 'analysis_day' not in st.session_state:
-    st.session_state.analysis_day = date.today().day
 
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
@@ -109,41 +100,7 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 中文日期选择 ----------
-current_year = date.today().year
-year_options = list(range(current_year - 30, current_year + 1))
-month_names = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
-month_values = list(range(1, 13))
-weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
-
-today_date = date.today()
-today_str = f"{today_date.year}年{today_date.month}月{today_date.day}日 星期{weekday_cn[today_date.weekday()]}"
-
-col1, col2, col3, col_today = st.columns([2, 2, 2, 1])
-with col1:
-    year = st.selectbox("年", year_options,
-                        index=year_options.index(st.session_state.analysis_year) if st.session_state.analysis_year in year_options else 0)
-with col2:
-    month = st.selectbox("月", month_values,
-                         format_func=lambda m: month_names[m-1],
-                         index=month_values.index(st.session_state.analysis_month) if st.session_state.analysis_month in month_values else 0)
-with col3:
-    max_day = calendar.monthrange(year, month)[1]
-    day = st.selectbox("日", range(1, max_day+1),
-                       index=min(st.session_state.analysis_day, max_day)-1)
-with col_today:
-    st.markdown("### ")
-    st.button("📌 今天", help="如需分析今天，请将上方年、月、日手动选为今天的日期")
-
-st.info(f"📅 今天是 **{today_str}**，请在上方下拉框中手动选为 {today_date.year} 年 {today_date.month} 月 {today_date.day} 日。")
-
-st.session_state.analysis_year = year
-st.session_state.analysis_month = month
-st.session_state.analysis_day = day
-
-selected_date = date(year, month, day)
-st.caption(f"📌 当前选择：{year}年{month}月{day}日 星期{weekday_cn[selected_date.weekday()]}")
-
+analysis_date = st.date_input("📅 分析日期（默认今天）", date.today())
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
 # ========== 侧边栏 ==========
@@ -207,6 +164,7 @@ with st.sidebar.expander("📦 固定搭配", expanded=True):
     st.caption(f"📖 {info['说明']}")
     st.caption(f"⏱️ 建议持仓周期：{info['适合周期']}")
 
+# ========== 参数调整 ==========
 params = {}
 with st.sidebar.expander("🔧 参数调整", expanded=True):
     params['use_kdj'] = st.session_state.use_kdj
@@ -275,6 +233,7 @@ with st.sidebar.expander("🔧 参数调整", expanded=True):
         params['trend_long_fast'] = 20
         params['trend_long_slow'] = 60
 
+# ========== 指标勾选区（带简短说明） ==========
 with st.sidebar.expander("⚡ 短线指标", expanded=True):
     use_kdj = st.checkbox("KDJ", key='use_kdj'); st.caption("K/D/J三线，判断超买超卖与金叉死叉")
     use_skdj = st.checkbox("SKDJ", key='use_skdj'); st.caption("慢速KDJ，信号更稳定，适合波段")
@@ -505,7 +464,7 @@ if st.button("🔍 开始分析"):
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
-        target_date = pd.to_datetime(selected_date)
+        target_date = pd.to_datetime(analysis_date)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
             st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
@@ -523,41 +482,41 @@ if st.button("🔍 开始分析"):
             hist_mask[exclude_start:exclude_end] = False
             hist_feat = combined.loc[hist_mask, feature_cols].values
 
-            if len(hist_feat) < 30:
-                st.warning("相似样本较少，结果可能有偏差")
+            if hist_feat.shape[1] > 0:
+                std = np.std(hist_feat, axis=0)
+                zero_var_mask = std == 0
+                if zero_var_mask.all():
+                    st.error("当前所选指标生成的特征全部为常数，无法进行相似度分析。请至少再添加一个其他指标。")
+                    st.stop()
+                elif zero_var_mask.any():
+                    feature_cols = [col for i, col in enumerate(feature_cols) if not zero_var_mask[i]]
+                    current_feat = combined.loc[target_idx, feature_cols].values.reshape(1, -1)
+                    hist_feat = combined.loc[hist_mask, feature_cols].values
+
+            if len(hist_feat) < 30 or hist_feat.shape[1] == 0:
+                st.error("可用于分析的特征列不足，请尝试选择更多指标或调整参数。")
+                st.stop()
 
             scaler = StandardScaler()
             scaler.fit(hist_feat)
-            current_feat_scaled = scaler.transform(current_feat)
-            hist_feat_scaled = scaler.transform(hist_feat)
-
-            # 使用欧氏距离
-            distances = euclidean_distances(current_feat_scaled, hist_feat_scaled)[0]
-            top_k = min(100, len(distances))
-            top_idx = np.argsort(distances)[:top_k]  # 距离最小的前100
+            sim = cosine_similarity(scaler.transform(current_feat), scaler.transform(hist_feat))[0]
+            top_k = min(30, len(sim))
+            top_idx = np.argsort(sim)[-top_k:][::-1]
             hist_combined_idx = combined.loc[hist_mask].index.values
             matched_indices = hist_combined_idx[top_idx]
-            matched_distances = distances[top_idx]
+            sim_scores = sim[top_idx]
 
             with st.expander("📊 当前分析日期的技术指标数值"):
                 cur_df = pd.DataFrame({"指标名称": feature_cols, "当前数值": combined.loc[target_idx, feature_cols].values})
                 st.dataframe(cur_df.set_index("指标名称"), use_container_width=True)
 
-            with st.expander("📊 近10年相似历史日期的技术指标数值（按距离排序）"):
-                ten_years_ago = pd.Timestamp(selected_date) - pd.Timedelta(days=10*365)
-                recent_indices = [idx for idx in matched_indices if combined.loc[idx, "date"] >= ten_years_ago]
-                if recent_indices:
-                    recent_df = combined.loc[recent_indices, ["date", "close"] + feature_cols].copy()
-                    recent_df.rename(columns={"close": "收盘价"}, inplace=True)
-                    recent_df["日期"] = recent_df["date"].dt.date
-                    recent_df = recent_df.drop(columns="date").set_index("日期")
-                    recent_df.index.name = "历史日期"
-                    # 添加距离列
-                    recent_idx_in_matched = [list(matched_indices).index(i) for i in recent_indices]
-                    recent_df["距离"] = [matched_distances[i] for i in recent_idx_in_matched]
-                    st.dataframe(recent_df, use_container_width=True)
-                else:
-                    st.info("近10年内没有找到相似的历史交易日。")
+            with st.expander("📊 最相似历史日期的技术指标数值（前5个）"):
+                top5 = matched_indices[:5]
+                sim_df = combined.loc[top5, ["date"]+feature_cols].copy()
+                sim_df["日期"] = sim_df["date"].dt.date
+                sim_df = sim_df.drop(columns="date").set_index("日期")
+                sim_df.index.name = "历史日期"
+                st.dataframe(sim_df, use_container_width=True)
 
             close_series = combined["close"].reset_index(drop=True)
             rets = []
@@ -598,9 +557,8 @@ if st.button("🔍 开始分析"):
                 fig.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="零收益线")
                 st.plotly_chart(fig, use_container_width=True)
 
-                with st.expander("相似历史日期及距离"):
+                with st.expander("相似历史日期及相似度"):
                     match_dates = combined.loc[matched_indices, "date"].reset_index(drop=True)
-                    dist_df = pd.DataFrame({"历史日期": match_dates.values[:len(matched_distances)], "距离": matched_distances})
-                    st.dataframe(dist_df.head(20))
+                    st.dataframe(pd.DataFrame({"历史日期": match_dates.values[:len(sim_scores)], "相似度": sim_scores}).head(20))
 
                 st.warning("⚠️ 风险提示：历史表现不代表未来，本工具仅供参考，不构成投资建议。")
