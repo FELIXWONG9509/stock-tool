@@ -109,12 +109,15 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 中文日期选择（完美无刷新方案） ----------
+# ---------- 中文日期选择（手动选今天，绝对稳定） ----------
 current_year = date.today().year
 year_options = list(range(current_year - 30, current_year + 1))
 month_names = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
 month_values = list(range(1, 13))
 weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
+
+today_date = date.today()
+today_str = f"{today_date.year}年{today_date.month}月{today_date.day}日 星期{weekday_cn[today_date.weekday()]}"
 
 col1, col2, col3, col_today = st.columns([2, 2, 2, 1])
 with col1:
@@ -130,11 +133,11 @@ with col3:
                        index=min(st.session_state.analysis_day, max_day)-1)
 with col_today:
     st.markdown("### ")
-    if st.button("📌 今天"):
-        st.session_state.analysis_year = date.today().year
-        st.session_state.analysis_month = date.today().month
-        st.session_state.analysis_day = date.today().day
-        st.success("✅ 日期已更新为今天！请再点击“开始分析”或切换持仓周期，下拉框便会自动刷新。")
+    # 不执行任何操作，仅显示提示
+    st.button("📌 今天", help="如需分析今天，请将上方年、月、日手动选为今天的日期")
+
+# 提示今天日期，引导手动选择
+st.info(f"📅 今天是 **{today_str}**，请在上方下拉框中手动选为 {today_date.year} 年 {today_date.month} 月 {today_date.day} 日。")
 
 # 将下拉框的当前选择同步回 session_state
 st.session_state.analysis_year = year
