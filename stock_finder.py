@@ -11,7 +11,7 @@ import re
 
 st.set_page_config(page_title="多指标历史相似概率", layout="wide")
 
-# 修复日期选择器星期乱码
+# 修复星期乱码
 st.markdown("""
     <style>
     input[type="date"] {
@@ -32,9 +32,9 @@ def extract_code_from_filename(filename):
         return 'sh' + code if code.startswith('6') else 'sz' + code
     return None
 
-# ---------- 初始化日期（独立变量，避免冲突） ----------
-if 'selected_date' not in st.session_state:
-    st.session_state.selected_date = date.today()
+# ---------- 使用一个独立的 session_state 变量存储日期，不与任何 widget key 同名 ----------
+if 'analysis_date_value' not in st.session_state:
+    st.session_state.analysis_date_value = date.today()
 
 # ---------- 股票代码输入 ----------
 default_code = st.session_state.get("auto_code", "600887")
@@ -114,20 +114,26 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"文件解析失败：{e}")
 
-# ---------- 日期选择 + 一键今天（彻底稳定版） ----------
+# ---------- 日期选择 + 一键今天（无冲突版） ----------
 col_date, col_today = st.columns([4, 1])
 with col_date:
-    # 直接通过 key 绑定到 selected_date，无需手动同步
-    st.date_input("📅 分析日期", key="selected_date")
+    # 关键：不设置 key，直接用 value 绑定，避免组件与手动赋值冲突
+    new_date = st.date_input(
+        "📅 分析日期",
+        value=st.session_state.analysis_date_value
+    )
+    # 将用户手动选择的日期同步回 session_state（但不会引起冲突）
+    st.session_state.analysis_date_value = new_date
 with col_today:
     st.markdown("### ")
     if st.button("📌 今天"):
-        st.session_state.selected_date = date.today()
+        # 直接修改这个专用的 session_state 变量
+        st.session_state.analysis_date_value = date.today()
         st.rerun()
 
 days_hold = st.selectbox("持仓周期（天）", [5, 10, 20, 50, 100, 150, 200, 300, 400], index=2)
 
-# ========== 侧边栏（完全不变） ==========
+# ========== 侧边栏（无变化） ==========
 FIXED_COMBOS = {
     "自定义（手动选择）": {"说明":"自由勾选指标。","适合周期":"不限","类别":"","keys":[]},
     "BOLL + KDJ 经典组合": {"说明":"布林带+KDJ，趋势与短线结合。","适合周期":"10~60天","类别":"经典组合","keys":["use_boll","use_kdj"]},
@@ -486,7 +492,8 @@ if st.button("🔍 开始分析"):
             st.error(f"有效历史数据不足（当前仅 {len(combined)} 天）。")
             st.stop()
 
-        target_date = pd.to_datetime(st.session_state.selected_date)  # 使用新的变量名
+        # 使用稳定的 analysis_date_value
+        target_date = pd.to_datetime(st.session_state.analysis_date_value)
         date_rows = combined[combined["date"] == target_date]
         if date_rows.empty:
             st.error(f"所选日期 {target_date.date()} 在数据中不存在。")
